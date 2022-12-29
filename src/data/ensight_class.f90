@@ -11,7 +11,7 @@ module ensight_class
    private
    
    ! Expose type/constructor/methods
-   public :: ensight
+   public :: ensight, add_rscalar
    
    ! List types
    type :: scl !< Scalar field
@@ -272,6 +272,7 @@ contains
       real(WP), intent(in) :: time
       character(len=str_medium) :: filename
       integer :: iunit,ierr,n,i
+      character(len=8) :: ierr_s
       integer :: ibuff
       character(len=80) :: cbuff
       type(MPI_File) :: ifile
@@ -317,7 +318,10 @@ contains
          if (this%cfg%amRoot) then
             ! Open the file
             open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
-            if (ierr.ne.0) call die('[ensight write data] Could not open file '//trim(filename))
+            if (ierr.ne.0) then
+              write(ierr_s, "(I4)") ierr
+              call die('[ensight write data] Could not open file '//trim(filename)//'(error '//ierr_s//')')
+            end if
             ! Write the header
             cbuff=trim(my_scl%name); write(iunit) cbuff
             cbuff='part'           ; write(iunit) cbuff

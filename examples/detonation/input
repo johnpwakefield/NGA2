@@ -1,0 +1,16 @@
+# Parallelization
+Partition :	2 2 1
+
+# Mesh definition
+Lx :	1.0
+nx :	64
+
+# Initialization
+Initial diameter : 0.2
+
+# Time integration
+Max cfl number :    0.98
+
+# Ensight output
+Ensight output period : 0.01
+

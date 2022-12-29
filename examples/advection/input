@@ -1,0 +1,19 @@
+# Parallelization
+Partition :	2 1 1
+
+# Mesh definition
+Lx :	1.0
+nx :	64
+
+# Initialization
+Shapes : c
+
+# Direction
+Advection direction : 1 1 0
+
+# Time integration
+Max cfl number :    0.98
+
+# Ensight output
+Ensight output period : 0.01
+

@@ -45,13 +45,13 @@ module muscl_class
 
   ! List of known available bcond types for this solver
   ! here 'right' means bcond direction +1
-  ! bits 1 and 2 - 00 nothing, 10 interpolate, 11 reflect interpolate
+  ! bits 1 and 2 - 00 nothing, 10 interpolate, 11 reflect
   ! bits 3 and 4 - 00 nothing, 01 zero normal velocity
   ! bit 5 - right moving waves, 0 leave, 1 zero
   ! bit 6 - left moving waves, 0 leave, 1 zero
-  integer(1), parameter, public :: wall_reflect = 7_1   !< reflecting wall
-  integer(1), parameter, public :: wall_absorb = 39_1   !< absorbing wall
-  integer(1), parameter, public :: no_waves = 34_1      !< outflow/free condition condition
+  integer(1), parameter, public :: WALL_REFLECT = 7_1   !< reflecting wall
+  integer(1), parameter, public :: WALL_ABSORB = 39_1   !< absorbing wall
+  integer(1), parameter, public :: NO_WAVES = 34_1      !< outflow/free condition condition
 
   ! riemann solutions for an N dimensional system are stored in N by N+4
   ! dimensional arrays, in which
@@ -91,9 +91,8 @@ module muscl_class
     type(bcond), pointer :: next                              !< linked list of bconds
     character(len=str_medium) :: name = 'UNNAMED_BCOND'       !< bcond name (default UNNAMED_BCOND)
     integer(1) :: type                                        !< bcond type
-    type(iterator) :: itr                                     !< this is the iterator for the bcond - this identifies the (i,j,k)
-    character(len=1) :: face                                  !< bcond face (x/y/z)
-    integer(1) :: dir                                         !< bcond direction (+1,-1,0 for interior)
+    type(iterator) :: itr                                     !< this is the iterator for the bcond
+    integer(1) :: dir                                         !< bcond direction 0-6
   end type bcond
 
   !> solver object definition
@@ -110,8 +109,7 @@ module muscl_class
     integer :: P                                              !< number of parameters
     procedure(eigenvals_ftype), pointer, nopass :: evals_x, evals_y, evals_z
     procedure(rsolver_ftype), pointer, nopass :: rsolv_x, rsolv_y, rsolv_z
-    !TODO all the reflecting bc stuff
-    logical, dimension(:), allocatable :: reflect_mask_x, reflect_mask_y, reflect_mask_z
+    logical, dimension(:), allocatable :: vel_mask_x, vel_mask_y, vel_mask_z
 
     ! limiting
     procedure(limiter_ftype), pointer, nopass :: limiter      !< limiter function
@@ -119,6 +117,7 @@ module muscl_class
 
     ! boundary condition list
     integer :: nbc                                            !< number of bcond for our solver
+    !TODO mft
     real(WP), dimension(:), allocatable :: mfr                !< mFR through each bcond
     real(WP), dimension(:), allocatable :: area               !< area for each bcond
     real(WP) :: correctable_area                              !< area of bcond that can be corrected
@@ -146,6 +145,7 @@ module muscl_class
 
     ! monitoring quantities
     real(WP), dimension(:), pointer :: Umin, Umax         !< state variable range
+    real(WP), dimension(:), pointer :: Uint               !< integral of state vars over domain
     logical :: have_Urange
 
   contains
@@ -160,7 +160,6 @@ module muscl_class
     procedure :: get_min => get_range                         !< compatibility
     procedure :: get_max => get_range                         !< compatibility
     !procedure :: get_mfr                                      !< mfr at ea bcond in last step
-    procedure :: compute_dU                                   !< take step
     procedure :: compute_dU_x, compute_dU_y, compute_dU_z     !< take step
 
     ! muscl specific
@@ -259,62 +258,54 @@ contains
     this%have_CFL_z_estim = .false.; this%have_CFL_z_exact = .false.;
 
     ! initialize monitoring
-    allocate(this%Umin(N), this%Umax(N))
+    allocate(this%Umin(N), this%Umax(N), this%Uint(N))
     this%have_Urange = .false.
 
   end function
 
   !> solver print function
   subroutine muscl_print(this)
+    use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
     class(muscl), intent(in) :: this
 
-    !TODO
-
-
+    if (this%cfg%amRoot) then
+      write(output_unit,'("MUSCL-type solver [",a,"] for config [",a,"]")')   &
+        & trim(this%name), trim(this%cfg%name)
+    end if
 
   end subroutine
 
   !> Add a boundary condition
-  subroutine add_bcond(this, name, type, locator, face, dir)
-    use string,   only: lowercase
-    use messager, only: die
+  subroutine add_bcond(this, name, type, locator, dir)
+    use iterator_class, only: locator_gen_ftype
+    use string,         only: lowercase
+    use messager,       only: die
     implicit none
     class(muscl), intent(inout) :: this
     character(len=*), intent(in) :: name
     integer(1), intent(in) :: type
-    external :: locator
-    interface
-      logical function locator(pargrid,ind1,ind2,ind3)
-        use pgrid_class, only: pgrid
-        class(pgrid), intent(in) :: pargrid
-        integer, intent(in) :: ind1,ind2,ind3
-      end function locator
-    end interface
-    character(len=1), intent(in) :: face
-    integer(1), intent(in) :: dir
+    procedure(locator_gen_ftype) :: locator
+    character(len=2), intent(in) :: dir
     type(bcond), pointer :: new_bc
     integer :: i, j, k, n
-    integer(1) :: fi, wbc
-
-    ! check input
-    select case (lowercase(face))
-      case ('x'); case ('y'); case ('z');
-      case default; call die('[muscl add_bcond] Unknown bcond face - expecting x, y, or z')
-    end select
-    if (abs(dir) .ne. 1 .and. dir .ne. 0) then
-      call die('[muscl add_bcond] Unknown bcond dir - expecting -1, +1, or 0')
-    end if
+    integer(1) :: wbc
 
     ! prepare new bcond
     allocate(new_bc)
     new_bc%name = trim(adjustl(name))
     new_bc%type = type
-    new_bc%face = lowercase(face)
-    fi = int(ichar(new_bc%face) - ichar('x'), 1)
-    new_bc%itr = iterator(pg=this%cfg, name=new_bc%name, locator=locator,     &
-      & face=new_bc%face)
-    new_bc%dir = dir
+    new_bc%itr = iterator(pg=this%cfg, name=new_bc%name, locator=locator)
+    select case (lowercase(dir))
+    case ('c');                    new_bc%dir = 0_1
+    case ('-x', 'x-', 'xl'); new_bc%dir = 2_1
+    case ('+x', 'x+', 'xr'); new_bc%dir = 1_1
+    case ('-y', 'y-', 'yl'); new_bc%dir = 4_1
+    case ('+y', 'y+', 'yr'); new_bc%dir = 3_1
+    case ('-z', 'z-', 'zl'); new_bc%dir = 6_1
+    case ('+z', 'z+', 'zr'); new_bc%dir = 5_1
+    case default; call die('[MUSCL add_bcond] unknown bcond direction')
+    end select
 
     ! insert it in front
     new_bc%next => this%first_bc
@@ -322,19 +313,20 @@ contains
     this%nbc = this%nbc + 1
 
     ! update wave zeroing array
-    wbc = ishft(ior(type, 96_1), -4_1)
-    if (dir .eq. -1_1) then
+    wbc = ishft(iand(type, 96_1), -4_1)
+    if (mod(new_bc%dir, 2_1) .eq. 0_1 .and. new_bc%dir .ne. 0_1) then
       select case (wbc)
-      case (1)
-        wbc = 2_1
-      case (2)
-        wbc = 1_1
-      case default
+      case (0_1); wbc = 0_1
+      case (1_1); wbc = 2_1
+      case (2_1); wbc = 1_1
+      case default; call die("assertion error")
       end select
     end if
-    wbc = ishft(wbc, 2 * fi)
-    do n = 1,new_bc%itr%n_
-      i = new_bc%itr%map(1,n); j = new_bc%itr%map(2,n); k = new_bc%itr%map(3,n)
+    wbc = ishft(wbc, 2 * ((new_bc%dir - 1_1) / 2_1))
+    do n = 1, new_bc%itr%n_
+      i = new_bc%itr%map(1,n)
+      j = new_bc%itr%map(2,n)
+      k = new_bc%itr%map(3,n)
       this%wavebcs(i,j,k) = this%wavebcs(i,j,k) + wbc
     end do
 
@@ -361,13 +353,14 @@ contains
   !> enforce boundary condition
   !> note that this interpolates (ensuring ghost cells have the right value),
   !> but all wave-related constraints are imposed during the step
-  !TODO
   subroutine apply_bcond(this, t, dt)
     use messager, only: die
     implicit none
     class(muscl), intent(inout) :: this
     real(WP), intent(in) :: t, dt
     integer(1) :: masked_type
+    logical, dimension(this%N) :: vel_mask
+    integer :: i, j, k, m, n, iref, jref, kref
     type(bcond), pointer :: my_bc
 
     ! Traverse bcond list
@@ -378,76 +371,51 @@ contains
       if (my_bc%itr%amIn) then
 
         ! Select appropriate action based on the bcond type
-        masked_type = ior(my_bc%type, 3_1)
+        masked_type = iand(my_bc%type, 3_1)
         select case (masked_type)
-
-          case (0)                      !< do nothing
-
-          case (2)                      !< interpolate
-
-
-
-          case (3)                      !< reflect interpolate
-
-
-
-          case (1)
-          call die('[muscl apply_bcond] Unknown bcond type')
+          case (0_1)                        !< do nothing
+          case (2_1)                        !< interpolate
+            do n = 1, my_bc%itr%no_
+              i = my_bc%itr%map(1,n)
+              j = my_bc%itr%map(2,n)
+              k = my_bc%itr%map(3,n)
+              iref = min(this%cfg%imax, max(this%cfg%imin, i))
+              jref = min(this%cfg%jmax, max(this%cfg%jmin, j))
+              kref = min(this%cfg%kmax, max(this%cfg%kmin, k))
+              this%Uc(:,i,j,k) = this%Uc(:,iref,jref,kref)
+            end do
+          case (3_1)                        !< reflect
+            !TODO
+            call die("not implemented")
+          case (1_1)
+            call die('[muscl apply_bcond] Unknown bcond type')
           case default 
-          call die('[muscl apply_bcond] Unknown bcond type')
+            call die('[muscl apply_bcond] Unknown bcond type')
         end select
 
-        !<<<<<<<<< TODO example of how this might be done
-        !! Implement based on bcond direction
-        !select case (my_bc%face)
-        !case ('x')
-        !  stag=min(my_bc%dir,0)
-        !  do n=1,my_bc%itr%n_
-        !    i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-        !    this%U(i     ,j    ,k    )=this%U(i-my_bc%dir     ,j    ,k    )
-        !    this%V(i+stag,j:j+1,k    )=this%V(i-my_bc%dir+stag,j:j+1,k    )
-        !    this%W(i+stag,j    ,k:k+1)=this%W(i-my_bc%dir+stag,j    ,k:k+1)
-        !  end do
-        !case ('y')
-        !  stag=min(my_bc%dir,0)
-        !  do n=1,my_bc%itr%n_
-        !    i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-        !    this%U(i:i+1,j+stag,k    )=this%U(i:i+1,j-my_bc%dir+stag,k    )
-        !    this%V(i    ,j     ,k    )=this%V(i    ,j-my_bc%dir     ,k    )
-        !    this%W(i    ,j+stag,k:k+1)=this%W(i    ,j-my_bc%dir+stag,k:k+1)
-        !  end do
-        !case ('z')
-        !  stag=min(my_bc%dir,0)
-        !  do n=1,my_bc%itr%n_
-        !    i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-        !    this%U(i:i+1,j    ,k+stag)=this%U(i:i+1,j    ,k-my_bc%dir+stag)
-        !    this%V(i    ,j:j+1,k+stag)=this%V(i    ,j:j+1,k-my_bc%dir+stag)
-        !    this%W(i    ,j    ,k     )=this%W(i    ,j    ,k-my_bc%dir     )
-        !  end do
-        !end select
-        !! If needed, clip
-        !if (my_bc%type.eq.clipped_neumann) then
-        !  select case (my_bc%face)
-        !  case ('x')
-        !    do n=1,my_bc%itr%n_
-        !      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-        !      if (this%U(i,j,k)*my_bc%rdir.lt.0.0_WP) this%U(i,j,k)=0.0_WP
-        !    end do
-        !  case ('y')
-        !    do n=1,my_bc%itr%n_
-        !      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-        !      if (this%V(i,j,k)*my_bc%rdir.lt.0.0_WP) this%V(i,j,k)=0.0_WP
-        !    end do
-        !  case ('z')
-        !    do n=1,my_bc%itr%n_
-        !      i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
-        !      if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
-        !    end do
-        !  end select
-        !end if
-
-        !>>>>>>>>>>>>>> end example
-
+        ! zero normal velocity?
+        masked_type = iand(my_bc%type, 4_1)
+        if (masked_type .eq. 4_1) then
+          select case (my_bc%dir)
+          case (0_1)
+            vel_mask(:) = this%vel_mask_x(:) .and. this%vel_mask_y(:) .and.   &
+              & this%vel_mask_z(:)
+          case (1_1, 2_1)
+            vel_mask(:) = this%vel_mask_x(:)
+          case (3_1, 4_1)
+            vel_mask(:) = this%vel_mask_y(:)
+          case (5_1, 6_1)
+            vel_mask(:) = this%vel_mask_z(:)
+          end select
+          do m = 1, my_bc%itr%n_
+            i = my_bc%itr%map(1,m)
+            j = my_bc%itr%map(2,m)
+            k = my_bc%itr%map(3,m)
+            do n = 1, this%N
+              if (vel_mask(n)) this%Uc(n,i,j,k) = 0.0_WP
+            end do
+          end do
+        end if
       end if
 
       ! Sync full fields after each bcond - this should be optimized
@@ -486,23 +454,26 @@ contains
   !> get min/max field values
   subroutine get_range(this)
     use messager, only: die
-    use mpi_f08,  only: MPI_ALLREDUCE, MPI_MIN, MPI_MAX
+    use mpi_f08,  only: MPI_ALLREDUCE, MPI_MIN, MPI_MAX, MPI_SUM
     use parallel, only: MPI_REAL_WP
     implicit none
     class(muscl), intent(inout) :: this
-    real(WP), dimension(this%N) :: task_Umin, task_Umax
+    real(WP), dimension(this%N) :: task_Umin, task_Umax, task_Uint
     integer :: i, j, k, ierr
 
     if (.not. this%have_Urange) then
 
-      task_Umin = + huge(1.0_WP)
-      task_Umax = - huge(1.0_WP)
+      task_Umin(:) = + huge(1.0_WP)
+      task_Umax(:) = - huge(1.0_WP)
+      task_Uint(:) = 0.0_WP
 
       do k=this%cfg%kmin_,this%cfg%kmax_
         do j=this%cfg%jmin_,this%cfg%jmax_
           do i=this%cfg%imin_,this%cfg%imax_
             task_Umin = min(task_Umin, this%Uc(:,i,j,k))
             task_Umax = max(task_Umax, this%Uc(:,i,j,k))
+            task_Uint = task_Uint + this%Uc(:,i,j,k) * this%cfg%dx(i) *       &
+              & this%cfg%dy(j) * this%cfg%dz(k)
           end do
         end do
       end do
@@ -513,6 +484,9 @@ contains
       call MPI_ALLREDUCE(task_Umax, this%Umax, this%N, MPI_REAL_WP, MPI_MAX,  &
         & this%cfg%comm, ierr)
       if (ierr .ne. 0) call die("error reducing Umax")
+      call MPI_ALLREDUCE(task_Uint, this%Uint, this%N, MPI_REAL_WP, MPI_SUM,  &
+        & this%cfg%comm, ierr)
+      if (ierr .ne. 0) call die("error reducing Uint")
 
       this%have_Urange = .true.
 
@@ -523,25 +497,6 @@ contains
   !> get mass flow rate through boundaries at previous step
   !TODO
 
-  !> compute dU
-  ! this is an unsplit step---its use is generally a bad idea.  A better
-  ! approach is to use the directional subroutines below in operator splitting;
-  ! e.g. Strang.  Strang stepping should utilize Jack's timestepping class.
-  subroutine compute_dU(this, dt)
-    implicit none
-    class(muscl), intent(inout) :: this
-    real(WP), intent(in) :: dt
-
-    this%dU(:, :, :, :) = 0.0_WP
-
-    call this%compute_dU_x(dt)
-
-    call this%compute_dU_y(dt)
-
-    call this%compute_dU_z(dt)
-
-  end subroutine compute_dU
-
   !> compute dU in x direction
   subroutine compute_dU_x(this, dt)
     use messager, only: die
@@ -551,19 +506,28 @@ contains
     class(muscl), intent(inout) :: this
     real(WP), intent(in) :: dt
     real(WP) :: cfl
-    integer :: N, P, M, j, k, ierr
+    integer :: N, P, M, i, j, k, ierr
+    integer(1), dimension(:), allocatable :: bc1d
 
     call this%cfg%sync(this%Uc)
 
     N = this%N; P = this%P; M = size(this%Uc, 2); cfl = 0.0_WP;
 
-    do k = this%cfg%kmin_,this%cfg%kmax_
-      do j = this%cfg%jmin_,this%cfg%jmax_
+    allocate(bc1d(this%cfg%imino_:this%cfg%imaxo_))
+
+    do k = this%cfg%kmin_, this%cfg%kmax_
+      do j = this%cfg%jmin_, this%cfg%jmax_
+        bc1d(:) = this%wavebcs(:,j,k)
+        do i = this%cfg%imino_, this%cfg%imaxo_
+          bc1d(i) = iand(this%wavebcs(i,j,k), 3_1)
+        end do
         call wavestep_1d(N, P, M, this%limiter, this%upratio_divzero_eps,     &
-          & this%rsolv_x, this%cfg%dx, this%wavebcs(:,j,k), dt,               &
+          & this%rsolv_x, this%cfg%dx, bc1d, dt,                              &
           & this%params(:,:,j,k), this%Uc(:,:,j,k), this%dU(:,:,j,k), cfl)
       end do
     end do
+
+    deallocate(bc1d)
 
     call this%cfg%sync(this%dU)
 
@@ -572,6 +536,7 @@ contains
     if (ierr .ne. 0) call die("error reducing CFL")
 
     this%have_CFL_x_estim = .true.; this%have_CFL_x_exact = .false.;
+    this%have_Urange = .false.
 
   end subroutine compute_dU_x
 
@@ -584,9 +549,11 @@ contains
     class(muscl), intent(inout) :: this
     real(WP), intent(in) :: dt
     real(WP) :: cfl
-    integer :: N, P, M, i, k, jmino_, jmaxo_, ierr
+    integer :: N, P, M, i, j, k, jmino_, jmaxo_, ierr
     real(WP), dimension(:,:), allocatable :: U1d, dU1d, p1d
     integer(1), dimension(:), allocatable :: bc1d
+
+    if (this%cfg%ny .lt. 2) return
 
     call this%cfg%sync(this%Uc)
 
@@ -602,12 +569,15 @@ contains
         U1d = this%Uc(:,i,jmino_:jmaxo_,k)
         dU1d = this%dU(:,i,jmino_:jmaxo_,k)
         p1d = this%params(:,i,jmino_:jmaxo_,k)
-        bc1d = this%wavebcs(i,jmino_:jmaxo_,k)
+        do j = jmino_, jmaxo_
+          bc1d(j) = iand(ishft(this%wavebcs(i,j,k), -2), 3_1)
+        end do
         call wavestep_1d(N, P, M, this%limiter, this%upratio_divzero_eps,     &
           & this%rsolv_y, this%cfg%dy, bc1d, dt, p1d, U1d, dU1d, cfl)
         this%dU(:,i,jmino_:jmaxo_,k) = dU1d
       end do
     end do
+
     deallocate(U1d, dU1d, p1d, bc1d)
 
     call this%cfg%sync(this%dU)
@@ -617,6 +587,7 @@ contains
     if (ierr .ne. 0) call die("error reducing CFL")
 
     this%have_CFL_y_estim = .true.; this%have_CFL_y_exact = .false.;
+    this%have_Urange = .false.
 
   end subroutine compute_dU_y
 
@@ -629,9 +600,11 @@ contains
     class(muscl), intent(inout) :: this
     real(WP), intent(in) :: dt
     real(WP) :: cfl
-    integer :: N, P, M, i, j, kmino_, kmaxo_, ierr
+    integer :: N, P, M, i, j, k, kmino_, kmaxo_, ierr
     real(WP), dimension(:,:), allocatable :: U1d, dU1d, p1d
     integer(1), dimension(:), allocatable :: bc1d
+
+    if (this%cfg%nz .lt. 2) return
 
     call this%cfg%sync(this%Uc)
 
@@ -648,11 +621,15 @@ contains
         dU1d = this%dU(:,i,j,kmino_:kmaxo_)
         p1d = this%params(:,i,j,kmino_:kmaxo_)
         bc1d = this%wavebcs(i,j,kmino_:kmaxo_)
+        do k = kmino_, kmaxo_
+          bc1d(k) = iand(ishft(this%wavebcs(i,j,k), -4), 3_1)
+        end do
         call wavestep_1d(N, P, M, this%limiter, this%upratio_divzero_eps,     &
           & this%rsolv_z, this%cfg%dz, bc1d, dt, p1d, U1d, dU1d, cfl)
         this%dU(:,i,j,kmino_:kmaxo_) = dU1d
       end do
     end do
+
     deallocate(U1d, dU1d, p1d, bc1d)
 
     call this%cfg%sync(this%dU)
@@ -662,6 +639,7 @@ contains
     if (ierr .ne. 0) call die("error reducing CFL")
 
     this%have_CFL_z_estim = .true.; this%have_CFL_z_exact = .false.;
+    this%have_Urange = .false.
 
   end subroutine compute_dU_z
 
@@ -689,10 +667,9 @@ contains
     call rsolver(N, params(:,2), U(:,2), params(:,3), U(:,3), lc)
     call rsolver(N, params(:,3), U(:,3), params(:,4), U(:,4), rc)
 
-    !TODO this is broken
-    !call handle_wavebc(wbcs(1), ll)
-    !call handle_wavebc(wbcs(2), lc)
-    !call handle_wavebc(wbcs(3), rc)
+    call handle_wavebc(wbcs(1), ll)
+    call handle_wavebc(wbcs(2), lc)
+    call handle_wavebc(wbcs(3), rc)
 
     CFLmax = max(CFLmax, maxval(abs(ll(:,1:2))) / min(dxs(1), dxs(2)))
     CFLmax = max(CFLmax, maxval(abs(lc(:,1:2))) / min(dxs(2), dxs(3)))
@@ -702,8 +679,7 @@ contains
 
     do j = 3, M-2
       call rsolver(N, params(:,j+1), U(:,j+1), params(:,j+2), U(:,j+2), rr)
-      !TODO this is broken
-      !call handle_wavebc(wbcs(j+1), rr)
+      call handle_wavebc(wbcs(j+1), rr)
       call compute_limval(N, limfun, eps, lc, rc, rr, phir)
       CFLmax = max(CFLmax, maxval(abs(rr(:,1:2))) / min(dxs(j+1), dxs(j+2)))
       call wavestep_firstorder_single(N, dxs(j), dt, lc, rc, dU(:,j))
@@ -723,15 +699,13 @@ contains
     real(WP), dimension(:,:), intent(inout) :: rs
     integer :: N
 
-    !TODO this is broken
-
     N = size(rs, 1)
 
     ! zero negative waves?
-    if (ior(bc, 1_1) .eq. 1_1) rs(:, 3:4) = max(rs(:, 3:4), 0.0_WP)
+    if (iand(bc, 1_1) .eq. 1_1) rs(:, 3:4) = max(rs(:, 3:4), 0.0_WP)
 
     ! zero positive waves?
-    if (ior(bc, 2_1) .eq. 2_1) rs(:, 3:4) = min(rs(:, 3:4), 0.0_WP)
+    if (iand(bc, 2_1) .eq. 2_1) rs(:, 3:4) = min(rs(:, 3:4), 0.0_WP)
 
   end subroutine handle_wavebc
 

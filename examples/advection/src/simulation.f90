@@ -86,11 +86,20 @@ contains
     ! num params is 3 here; this will have to be changed for other systems
     numparams = 3
 
-    ! check domain
+    ! remind user whether periodic
     check_cfg: block
 
-      if (cfg%xL .ne. cfg%yL .or. cfg%xL .ne. cfg%zL) call die("domain must be square")
-      if (.not. (cfg%xper .and. cfg%yper .and. cfg%zper)) call die("domain must be periodic")
+      if (cfg%amRoot) then
+
+        if (.not. (cfg%xper .and. cfg%yper .and. cfg%zper)) then
+          write(*,*) "domain is not periodic"
+        end if
+
+        if (cfg%xper .and. cfg%yper .and. cfg%zper) then
+          write(*,*) "periodic domain"
+        end if
+
+      end if
 
     end block check_cfg
 
@@ -291,23 +300,19 @@ contains
       call time%adjust_dt()
       call time%increment()
 
-      ! take step (unsplit)
-      !call fs%compute_dU(time%dt)
-      !fs%Uc = fs%Uc + fs%dU
-
       ! take step (Strang)
       fs%dU(:, :, :, :) = 0.0_WP
+      !call fs%apply_bcond(time%t, time%dt)
       call fs%compute_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:, :, :, :) = 0.0_WP
+      !call fs%apply_bcond(time%t, time%dt)
       call fs%compute_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:, :, :, :) = 0.0_WP
+      !call fs%apply_bcond(time%t, time%dt)
       call fs%compute_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
-
-      ! apply boundary conditions
-      !call fs%apply_bcond(time%t, time%dt)
 
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)

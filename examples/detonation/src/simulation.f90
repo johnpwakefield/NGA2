@@ -2,7 +2,7 @@
 module simulation
   use precision,            only: WP
   use geometry,             only: cfg
-  use muscl_class,          only: muscl
+  use muscl_class,          only: muscl, NO_WAVES
   use hyperbolic_euler,     only: make_euler_muscl, euler_tocons,             &
     & euler_tophys, SOD_PHYS_L, SOD_PHYS_R, DIATOMIC_GAMMA
   use timetracker_class,    only: timetracker
@@ -25,7 +25,7 @@ module simulation
   real(WP), dimension(:,:,:,:), pointer :: phys_out
 
   !> simulation monitor file
-  type(monitor) :: mfile, cflfile
+  type(monitor) :: mfile, cflfile, consfile
 
   !> simulation control functions
   public :: simulation_init, simulation_run, simulation_final
@@ -48,6 +48,62 @@ contains
     call cfg%sync(phys_out)
 
   end subroutine
+
+  !> functions localize the sides of the domain
+  function side_locator_x_l(pg, i, j, k) result(loc)
+    use pgrid_class, only: pgrid
+    implicit none
+    class(pgrid), intent(in) :: pg
+    integer, intent(in) :: i, j, k
+    logical :: loc
+    loc = .false.
+    if (i.lt.pg%imin) loc = .true.
+  end function side_locator_x_l
+  function side_locator_x_r(pg, i, j, k) result(loc)
+    use pgrid_class, only: pgrid
+    implicit none
+    class(pgrid), intent(in) :: pg
+    integer, intent(in) :: i, j, k
+    logical :: loc
+    loc = .false.
+    if (i.gt.pg%imax) loc = .true.
+  end function side_locator_x_r
+  function side_locator_y_l(pg, i, j, k) result(loc)
+    use pgrid_class, only: pgrid
+    implicit none
+    class(pgrid), intent(in) :: pg
+    integer, intent(in) :: i, j, k
+    logical :: loc
+    loc = .false.
+    if (j.lt.pg%jmin) loc = .true.
+  end function side_locator_y_l
+  function side_locator_y_r(pg, i, j, k) result(loc)
+    use pgrid_class, only: pgrid
+    implicit none
+    class(pgrid), intent(in) :: pg
+    integer, intent(in) :: i, j, k
+    logical :: loc
+    loc = .false.
+    if (j.gt.pg%jmax) loc = .true.
+  end function side_locator_y_r
+  function side_locator_z_l(pg, i, j, k) result(loc)
+    use pgrid_class, only: pgrid
+    implicit none
+    class(pgrid), intent(in) :: pg
+    integer, intent(in) :: i, j, k
+    logical :: loc
+    loc = .false.
+    if (k.lt.pg%kmin) loc = .true.
+  end function side_locator_z_l
+  function side_locator_z_r(pg, i, j, k) result(loc)
+    use pgrid_class, only: pgrid
+    implicit none
+    class(pgrid), intent(in) :: pg
+    integer, intent(in) :: i, j, k
+    logical :: loc
+    loc = .false.
+    if (k.gt.pg%kmax) loc = .true.
+  end function side_locator_z_r
 
   !> initialization of problem solver
   subroutine simulation_init()
@@ -72,28 +128,48 @@ contains
       ! call constructor
       fs = make_euler_muscl(cfg)
 
+      ! set bcs
+      call fs%add_bcond(name='openxl' , type=NO_WAVES,                        &
+        & locator=side_locator_x_l, dir='xl')
+      call fs%add_bcond(name='openxr' , type=NO_WAVES,                        &
+        & locator=side_locator_x_r, dir='xr')
+      call fs%add_bcond(name='openyl' , type=NO_WAVES,                        &
+        & locator=side_locator_y_l, dir='yl')
+      call fs%add_bcond(name='openyr' , type=NO_WAVES,                        &
+        & locator=side_locator_y_r, dir='yr')
+      call fs%add_bcond(name='openzl' , type=NO_WAVES,                        &
+        & locator=side_locator_z_l, dir='zl')
+      call fs%add_bcond(name='openzr' , type=NO_WAVES,                        &
+        & locator=side_locator_z_r, dir='zr')
+
     end block create_and_initialize_flow_solver
 
     ! prepare initial fields
     initialize_fields: block
-      real(WP) :: r2, oR
+      real(WP) :: r2, oR, initxvel
       real(WP), dimension(3) :: x, c
-      real(WP), dimension(5) :: insval, outval
+      real(WP), dimension(5) :: insvalphys, outvalphys, insval, outval
       integer :: i, j, k
 
       call param_read('Initial diameter', oR)
       oR = 0.5_WP * oR
 
-      call euler_tocons(DIATOMIC_GAMMA, SOD_PHYS_L, insval)
-      call euler_tocons(DIATOMIC_GAMMA, SOD_PHYS_R, outval)
+      call param_read('Initial x velocity', initxvel, 'Initial x velocity', 0.0_WP)
 
-      c = 0.5 * (/ cfg%xL, cfg%yL, cfg%zL /)
+      insvalphys = SOD_PHYS_L
+      outvalphys = SOD_PHYS_R
+      insvalphys(2) = insvalphys(2) + initxvel
+      outvalphys(2) = outvalphys(2) + initxvel
+      call euler_tocons(DIATOMIC_GAMMA, insvalphys, insval)
+      call euler_tocons(DIATOMIC_GAMMA, outvalphys, outval)
 
-      do k = cfg%kmin_, cfg%kmax_
+      c = 0.5_WP * (/ cfg%xL, cfg%yL, cfg%zL /)
+
+      do k = cfg%kmino_, cfg%kmaxo_
         x(3) = cfg%zm(k)
-        do j = cfg%jmin_, cfg%jmax_
+        do j = cfg%jmino_, cfg%jmaxo_
           x(2) = cfg%ym(j)
-          do i = cfg%imin_, cfg%imax_
+          do i = cfg%imino_, cfg%imaxo_
             x(1) = cfg%xm(i)
             r2 = sum((c - x)**2)
             if (r2 .lt. oR**2) then
@@ -168,25 +244,25 @@ contains
       !call mfile%add_column(real_ptr, fields(i:i)//'min')
       !call mfile%add_column(real_ptr, fields(i:i)//'max')
       real_ptr => fs%Umin(1)
-      call add_column_real(mfile, real_ptr, 'density_min')
+      call add_column_real(mfile, real_ptr, 'dens_min')
       real_ptr => fs%Umax(1)
-      call add_column_real(mfile, real_ptr, 'density_max')
+      call add_column_real(mfile, real_ptr, 'dens_max')
       real_ptr => fs%Umin(2)
-      call add_column_real(mfile, real_ptr, 'momentum_x_min')
+      call add_column_real(mfile, real_ptr, 'momx_min')
       real_ptr => fs%Umax(2)
-      call add_column_real(mfile, real_ptr, 'momentum_x_max')
+      call add_column_real(mfile, real_ptr, 'momx_max')
       real_ptr => fs%Umin(3)
-      call add_column_real(mfile, real_ptr, 'momentum_y_min')
+      call add_column_real(mfile, real_ptr, 'momy_min')
       real_ptr => fs%Umax(3)
-      call add_column_real(mfile, real_ptr, 'momentum_y_max')
+      call add_column_real(mfile, real_ptr, 'momy_max')
       real_ptr => fs%Umin(4)
-      call add_column_real(mfile, real_ptr, 'momentum_z_min')
+      call add_column_real(mfile, real_ptr, 'momz_min')
       real_ptr => fs%Umax(4)
-      call add_column_real(mfile, real_ptr, 'momentum_z_max')
+      call add_column_real(mfile, real_ptr, 'momz_max')
       real_ptr => fs%Umin(5)
-      call add_column_real(mfile, real_ptr, 'totalenergy_min')
+      call add_column_real(mfile, real_ptr, 'totE_min')
       real_ptr => fs%Umax(5)
-      call add_column_real(mfile, real_ptr, 'totalenergy_max')
+      call add_column_real(mfile, real_ptr, 'totE_max')
       call mfile%write()
 
       ! Create CFL monitor
@@ -197,6 +273,22 @@ contains
       call cflfile%add_column(fs%CFL_y, 'CFLy')
       call cflfile%add_column(fs%CFL_z, 'CFLz')
       call cflfile%write()
+
+      ! Create conservation monitor
+      consfile = monitor(fs%cfg%amRoot, 'conservation')
+      call consfile%add_column(time%n, 'Timestep number')
+      call consfile%add_column(time%t, 'Time')
+      real_ptr => fs%Uint(1)
+      call add_column_real(consfile, real_ptr, 'dens_int')
+      real_ptr => fs%Uint(2)
+      call add_column_real(consfile, real_ptr, 'momx_int')
+      real_ptr => fs%Uint(3)
+      call add_column_real(consfile, real_ptr, 'momy_int')
+      real_ptr => fs%Uint(4)
+      call add_column_real(consfile, real_ptr, 'momz_int')
+      real_ptr => fs%Uint(5)
+      call add_column_real(consfile, real_ptr, 'totE_int')
+      call consfile%write()
 
     end block create_monitor
 
@@ -215,18 +307,18 @@ contains
       call time%increment()
 
       ! take step (Strang)
+      !call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
       call fs%compute_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
+      !call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
       call fs%compute_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
+      !call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
       call fs%compute_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
-
-      ! apply boundary conditions
-      !call fs%apply_bcond(time%t, time%dt)
 
       ! Output to ensight
       if (ens_evt%occurs()) then
@@ -238,6 +330,7 @@ contains
       call fs%get_range()
       call mfile%write()
       call cflfile%write()
+      call consfile%write()
 
     end do
 

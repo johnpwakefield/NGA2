@@ -49,6 +49,11 @@ contains
       solver%params(i,:,:,:) = velocity(i)
     end do
 
+    ! set velocity mask
+    solver%vel_mask_x(:) = .false.
+    solver%vel_mask_y(:) = .false.
+    solver%vel_mask_z(:) = .false.
+
   end function make_advec_muscl
 
   pure subroutine advec_evals_x(N, params, U, evals)

@@ -247,6 +247,9 @@ contains
     !allocate(this%trans(imino:imaxo,jmino:jmaxo,kmino:kmaxo))
     !this%have_trans_flags = .false.
 
+    ! allocate velocity masks
+    allocate(this%vel_mask_x(N), this%vel_mask_y(N), this%vel_mask_z(N))
+
     ! wave bcs flags
     allocate(this%wavebcs(imino:imaxo,jmino:jmaxo,kmino:kmaxo))
     this%wavebcs(:,:,:) = 0_1
@@ -375,18 +378,55 @@ contains
         select case (masked_type)
           case (0_1)                        !< do nothing
           case (2_1)                        !< interpolate
-            do n = 1, my_bc%itr%no_
-              i = my_bc%itr%map(1,n)
-              j = my_bc%itr%map(2,n)
-              k = my_bc%itr%map(3,n)
+            do m = 1, my_bc%itr%no_
+              i = my_bc%itr%map(1,m)
+              j = my_bc%itr%map(2,m)
+              k = my_bc%itr%map(3,m)
               iref = min(this%cfg%imax, max(this%cfg%imin, i))
               jref = min(this%cfg%jmax, max(this%cfg%jmin, j))
               kref = min(this%cfg%kmax, max(this%cfg%kmin, k))
               this%Uc(:,i,j,k) = this%Uc(:,iref,jref,kref)
             end do
           case (3_1)                        !< reflect
-            !TODO
-            call die("not implemented")
+            do m = 1, my_bc%itr%no_
+              i = my_bc%itr%map(1,m)
+              j = my_bc%itr%map(2,m)
+              k = my_bc%itr%map(3,m)
+              iref = min(this%cfg%imax, max(this%cfg%imin, i))
+              jref = min(this%cfg%jmax, max(this%cfg%jmin, j))
+              kref = min(this%cfg%kmax, max(this%cfg%kmin, k))
+              if (i .ne. iref) then
+                if (i .lt. iref) then
+                  iref = i + 2 * (iref - i) - 1
+                else
+                  iref = i - 2 * (i - iref) + 1
+                end if
+                vel_mask(:) = this%vel_mask_x(:)
+              end if
+              if (j .ne. jref) then
+                if (j .lt. jref) then
+                  jref = j + 2 * (jref - j) - 1
+                else
+                  jref = j - 2 * (j - jref) + 1
+                end if
+                vel_mask(:) = this%vel_mask_y(:)
+              end if
+              if (k .ne. kref) then
+                if (k .lt. kref) then
+                  kref = k + 2 * (kref - k) - 1
+                else
+                  kref = k - 2 * (k - kref) + 1
+                end if
+                vel_mask(:) = this%vel_mask_z(:)
+              end if
+              do n = 1, this%N
+                if (vel_mask(n)) then
+                  this%Uc(n,i,j,k) = - this%Uc(n,iref,jref,kref)
+                else
+                  this%Uc(n,i,j,k) = + this%Uc(n,iref,jref,kref)
+                end if
+              end do
+            end do
           case (1_1)
             call die('[muscl apply_bcond] Unknown bcond type')
           case default 

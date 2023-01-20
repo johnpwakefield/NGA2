@@ -66,6 +66,11 @@ contains
     ! set param array to hold gamma
     solver%params(1,:,:,:) = gma_actual
 
+    ! set velocity mask
+    solver%vel_mask_x(:) = (/ .false., .true., .false., .false., .false. /)
+    solver%vel_mask_y(:) = (/ .false., .false., .true., .false., .false. /)
+    solver%vel_mask_z(:) = (/ .false., .false., .false., .true., .false. /)
+
   end function make_euler_muscl
 
   !> Convert to Physical Coordinates (velocity and pressure to momentum and energy)

@@ -86,23 +86,6 @@ contains
     ! num params is 3 here; this will have to be changed for other systems
     numparams = 3
 
-    ! remind user whether periodic
-    check_cfg: block
-
-      if (cfg%amRoot) then
-
-        if (.not. (cfg%xper .and. cfg%yper .and. cfg%zper)) then
-          write(*,*) "domain is not periodic"
-        end if
-
-        if (cfg%xper .and. cfg%yper .and. cfg%zper) then
-          write(*,*) "periodic domain"
-        end if
-
-      end if
-
-    end block check_cfg
-
     ! read shapes
     read_shapes: block
       character(len=str_medium) :: fieldbuffer

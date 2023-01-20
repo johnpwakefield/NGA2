@@ -22,7 +22,6 @@ contains
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
-         logical :: periodic
          integer :: i, j, k, nx, ny, nz
          real(WP) :: Lx, Ly, Lz
          real(WP), dimension(:), allocatable :: x, y, z
@@ -34,7 +33,6 @@ contains
          call param_read('ny', ny)
          call param_read('Lz', Lz)
          call param_read('nz', nz)
-         call param_read('Periodic', periodic)
 
          ! allocate
          allocate(x(nx+1), y(ny+1), z(nz+1))
@@ -51,8 +49,8 @@ contains
          end do
 
          ! generate serial grid object
-         grid=sgrid(coord=cartesian, no=2, x=x, y=x, z=x, xper=periodic,      &
-           & yper=periodic, zper=periodic)
+         grid=sgrid(coord=cartesian, no=2, x=x, y=x, z=x, xper=.false.,       &
+           & yper=.false., zper=.false.)
 
          deallocate(x, y, z)
 

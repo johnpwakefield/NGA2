@@ -8,11 +8,15 @@ Ly :	1.0
 ny :	64
 Lz :	1.0
 nz :	1
-Periodic : false
+
+# Reflect?
+Reflect : true
 
 # Initialization
-Initial diameter : 0.2
-Initial x velocity : 0.5
+Initial diameter : 0.16
+Initial x velocity : 0.0
+Initial x position : 0.8
+Initial pressure multiplier : 12.0
 
 # Time integration
 Max cfl number :    0.98

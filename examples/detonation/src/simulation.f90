@@ -2,7 +2,7 @@
 module simulation
   use precision,            only: WP
   use geometry,             only: cfg
-  use muscl_class,          only: muscl, NO_WAVES
+  use muscl_class,          only: muscl, NO_WAVES, WALL_REFLECT
   use hyperbolic_euler,     only: make_euler_muscl, euler_tocons,             &
     & euler_tophys, SOD_PHYS_L, SOD_PHYS_R, DIATOMIC_GAMMA
   use timetracker_class,    only: timetracker
@@ -10,6 +10,7 @@ module simulation
   use partmesh_class,       only: partmesh
   use event_class,          only: event
   use monitor_class,        only: monitor
+  use string, only: str_medium
   implicit none
   private
 
@@ -18,6 +19,7 @@ module simulation
   type(timetracker), public :: time
 
   !> Ensight postprocessing
+  character(len=str_medium) :: ens_out_name
   type(ensight)  :: ens_out
   type(event)    :: ens_evt
 
@@ -40,7 +42,8 @@ contains
     do k = cfg%kmin_, cfg%kmax_
       do j = cfg%jmin_, cfg%jmax_
         do i = cfg%imin_, cfg%imax_
-          call euler_tophys(DIATOMIC_GAMMA, fs%Uc(:,i,j,k), phys_out(:,i,j,k))
+          call euler_tophys(DIATOMIC_GAMMA, fs%Uc(:,i,j,k), phys_out(1:5,i,j,k))
+          phys_out(6,i,j,k) = sqrt(sum(phys_out(2:4,i,j,k)**2) / (DIATOMIC_GAMMA * phys_out(5,i,j,k) / phys_out(1,i,j,k)))
         end do
       end do
     end do
@@ -108,7 +111,6 @@ contains
   !> initialization of problem solver
   subroutine simulation_init()
     use param, only: param_read
-    use string, only: str_medium
     use messager, only: die
     implicit none
 
@@ -122,8 +124,11 @@ contains
 
     end block initialize_timetracker
 
-    ! create a single-phase flow solver without bconds
+    ! create a single-phase flow solver
     create_and_initialize_flow_solver: block
+      logical :: reflect
+
+      call param_read('Reflect', reflect)
 
       ! call constructor
       fs = make_euler_muscl(cfg)
@@ -131,8 +136,15 @@ contains
       ! set bcs
       call fs%add_bcond(name='openxl' , type=NO_WAVES,                        &
         & locator=side_locator_x_l, dir='xl')
-      call fs%add_bcond(name='openxr' , type=NO_WAVES,                        &
-        & locator=side_locator_x_r, dir='xr')
+      if (reflect) then
+        call fs%add_bcond(name='reflxr' , type=WALL_REFLECT,                  &
+          & locator=side_locator_x_r, dir='xr')
+        ens_out_name = 'SodSphereReflect'
+      else
+        call fs%add_bcond(name='openxr' , type=NO_WAVES,                      &
+          & locator=side_locator_x_r, dir='xr')
+        ens_out_name = 'SodSphereOpen'
+      end if
       call fs%add_bcond(name='openyl' , type=NO_WAVES,                        &
         & locator=side_locator_y_l, dir='yl')
       call fs%add_bcond(name='openyr' , type=NO_WAVES,                        &
@@ -146,24 +158,28 @@ contains
 
     ! prepare initial fields
     initialize_fields: block
-      real(WP) :: r2, oR, initxvel
+      real(WP) :: r2, oR, initxpos, initxvel, initpmul
       real(WP), dimension(3) :: x, c
       real(WP), dimension(5) :: insvalphys, outvalphys, insval, outval
       integer :: i, j, k
 
       call param_read('Initial diameter', oR)
-      oR = 0.5_WP * oR
+      call param_read('Initial x position', initxpos, 'Initial x pos', 0.5_WP * cfg%xL)
+      call param_read('Initial x velocity', initxvel, 'Initial x vel', 0.0_WP)
+      call param_read('Initial pressure multiplier', initpmul, 'Initial p mul', 1.0_WP)
 
-      call param_read('Initial x velocity', initxvel, 'Initial x velocity', 0.0_WP)
+      oR = 0.5_WP * oR
 
       insvalphys = SOD_PHYS_L
       outvalphys = SOD_PHYS_R
       insvalphys(2) = insvalphys(2) + initxvel
       outvalphys(2) = outvalphys(2) + initxvel
+      insvalphys(5) = insvalphys(5) * initpmul
+
       call euler_tocons(DIATOMIC_GAMMA, insvalphys, insval)
       call euler_tocons(DIATOMIC_GAMMA, outvalphys, outval)
 
-      c = 0.5_WP * (/ cfg%xL, cfg%yL, cfg%zL /)
+      c = 0.5_WP * (/ 2 * initxpos, cfg%yL, cfg%zL /)
 
       do k = cfg%kmino_, cfg%kmaxo_
         x(3) = cfg%zm(k)
@@ -192,11 +208,11 @@ contains
       real(WP), dimension(:,:,:), pointer :: scl_ptr
 
       ! create array to hold physical coordinates
-      allocate(phys_out(5,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,        &
+      allocate(phys_out(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,        &
         & cfg%kmino_:cfg%kmaxo_))
 
       ! Create Ensight output from cfg
-      ens_out = ensight(cfg=cfg, name='SodSphereTest')
+      ens_out = ensight(cfg=cfg, name=ens_out_name)
 
       ! Create event for Ensight output
       ens_evt = event(time=time, name='Ensight output')
@@ -215,6 +231,8 @@ contains
       call add_rscalar(ens_out, 'pressure', scl_ptr)
       scl_ptr => fs%params(1,:,:,:)
       call add_rscalar(ens_out, 'gamma', scl_ptr)
+      scl_ptr => phys_out(6,:,:,:)
+      call add_rscalar(ens_out, 'Ma', scl_ptr)
 
       ! Output to ensight
       if (ens_evt%occurs()) then
@@ -307,15 +325,15 @@ contains
       call time%increment()
 
       ! take step (Strang)
-      !call fs%apply_bcond(time%t, time%dt)
+      call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
       call fs%compute_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
-      !call fs%apply_bcond(time%t, time%dt)
+      call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
       call fs%compute_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
-      !call fs%apply_bcond(time%t, time%dt)
+      call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
       call fs%compute_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU

@@ -14,7 +14,7 @@ module simulation
   implicit none
   private
 
-  !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
+  !> Flow solver and a time tracker
   type(muscl), public :: fs
   type(timetracker), public :: time
 

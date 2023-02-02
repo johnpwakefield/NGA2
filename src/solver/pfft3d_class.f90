@@ -151,7 +151,7 @@ contains
 
       ! Ensure that we have at least one non-decomposed direction
       ndims = count(gdims_real .gt. 1); ndcp = count(pdims .gt. 1);
-      if (ndcp .ge. ndims) call die('[pdfft3 constructor] Need at least one NON-decomposed direction')
+      if (ndcp .ge. ndims) call die('[pdfft3] Need at least one NON-decomposed direction')
 
     end block check_solver_is_useable
 
@@ -166,23 +166,20 @@ contains
     call p3dfft_init_3Dtype(type_rcc, type_ids_f)
     call p3dfft_init_3Dtype(type_ccr, type_ids_b)
 
-    ! Set up processor order and memory ordering, as well as the final global
-    ! grid dimensions.  These will be different from the original dimensions in
-    ! one dimension due to conjugate symmetry, since we are doing
-    ! real-to-complex transform.
+    ! set fourier dimensions, first index is halved due to real symmetry
     gdims_fourier(:) = gdims_real(:)
     gdims_fourier(1) = gdims_fourier(1) / 2 + 1
-    mem_order_real(:) = (/ 0, 1, 2 /)
 
-    ! Set up memory order for the final grid layout (for complex array in
-    ! Fourier space). It is more convenient to have the storage order of
-    ! the array reversed, this helps save on memory access bandwidth, and
-    ! shouldn't affect the operations in the Fourier space very much,
-    ! requiring basically a change in the loop order. However it is possible
-    ! to define the memory ordering the same as default (0,1,2). Note that
-    ! the memory ordering is specified in C indices, i.e. starting from 0.
-    mem_order_fourier(:) = (/ 1, 2, 0 /)
-    dmap_real(:) = (/ 0, 1, 2 /); dmap_fourier(:) = (/ 1, 2, 0 /);
+    ! set memory access order; cannot have a singleton dimension be decomposed,
+    ! and mem_order / dmap permute processor coordinates; for 2d we just
+    ! use 0, 1, 2 and ensure nx is not one
+    mem_order_real(:) = (/ 0, 1, 2 /); dmap_real(:) = (/ 0, 1, 2 /);
+    if (any(gdims_real .eq. 1)) then                      ! 2d case
+      mem_order_fourier(:) = (/ 0, 1, 2 /); dmap_fourier(:) = (/ 0, 1, 2 /);
+      if (gdims_real(1) .eq. 1) call die("[pf3dft] cannot run 2d with nx = 1")
+    else                                                  ! 3d case
+      mem_order_fourier(:) = (/ 1, 2, 0 /); dmap_fourier(:) = (/ 1, 2, 0 /);
+    end if
 
     ! Specify the default communicator for P3DFFT++. This can be different
     ! from your program default communicator.

@@ -8,7 +8,7 @@ module monitor_class
    
    
    ! Expose constructor for monitor object
-   public :: monitor, add_column_real
+   public :: monitor
    
    
    !> Preset some length and formats for the columns

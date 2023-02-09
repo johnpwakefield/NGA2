@@ -1,20 +1,7 @@
 !>  MUSCL-type solver class
-!>  Provides support for various BC, generic hyperbolic structures, and source
-!>  terms projected onto eigenstructures
+!>  Provides support for various BC, generic hyperbolic structures
 !>
-!>  Originally written by John P Wakefield, December 2022
-!>
-!>  this file includes:
-!>
-!>    - module block
-!>        - function interfaces
-!>        - bc type
-!>        - solver class def
-!>        - system class defs
-!>    - contains (with headers containing exactly these phrases)
-!>        - standard interface class functions
-!>        - muscl-specific class functions
-!>        - limiter definitions
+!>  Originally written by John P Wakefield in December 2022.
 !>
 !>  When possible, helper functions immediately follow the class function that
 !>  calls them.
@@ -24,15 +11,12 @@ module muscl_class
   use string,         only: str_medium
   use config_class,   only: config
   use iterator_class, only: iterator
-  use hyperbolic
+  use hyperbolic,     only: limiter_ftype, eigenvals_ftype, rsolver_ftype, get_limiter
   implicit none
   private
 
   ! expose type/constructor/methods
-  public :: muscl, constructor, bcond
-
-  ! expose interfaces
-  public :: eigenvals_ftype, rsolver_ftype, limiter_ftype
+  public :: muscl, muscl_bc
 
   ! List of known available bcond types for this solver
   ! here 'right' means bcond direction +1
@@ -49,53 +33,49 @@ module muscl_class
   ! rs(:, 1)       left-going eigenvalues
   ! rs(:, 2)       right-going eigenvalues
   ! rs(:, 3)       wave strengths
-  ! rs(:, 4)       (projected) source strengths
+  ! rs(:, 4)       (projected) source strengths (only a good idea in 1d; commented below)
   ! rs(:, 5:(N+4)) (linearized) eigenvectors
 
   !> boundary conditions for the hyperbolic solver
-  type :: bcond
-    type(bcond), pointer :: next                              !< linked list of bconds
-    character(len=str_medium) :: name = 'UNNAMED_BCOND'       !< bcond name (default UNNAMED_BCOND)
-    integer(1) :: type                                        !< bcond type
-    type(iterator) :: itr                                     !< this is the iterator for the bcond
-    integer(1) :: dir                                         !< bcond direction 0-6
-  end type bcond
+  type :: muscl_bc
+    type(muscl_bc), pointer :: next                     !< linked list of bconds
+    character(len=str_medium) :: name = 'UNNAMED_BC'    !< bcond name (default UNNAMED_BCOND)
+    integer(1) :: type                                  !< bcond type
+    type(iterator) :: itr                               !< this is the iterator for the bcond
+    integer(1) :: dir                                   !< bcond direction 0-6
+  end type muscl_bc
 
   !> solver object definition
   type :: muscl
 
     ! config / pgrid object
-    class(config), pointer :: cfg                             !< config / pgrid information
+    class(config), pointer :: cfg                       !< config / pgrid information
 
     ! name
-    character(len=str_medium) :: name = 'UNNAMED_MUSCL'       !< solver name (default UNNAMED_MUSCL)
+    character(len=str_medium) :: name = 'MUSCL'         !< solver name
 
     ! system information
-    integer :: N                                              !< system dimension
-    integer :: P                                              !< number of parameters
+    integer :: N                                        !< system dimension
+    integer :: P                                        !< number of parameters
     procedure(eigenvals_ftype), pointer, nopass :: evals_x, evals_y, evals_z
     procedure(rsolver_ftype), pointer, nopass :: rsolv_x, rsolv_y, rsolv_z
     logical, dimension(:), allocatable :: vel_mask_x, vel_mask_y, vel_mask_z
 
     ! limiting
-    procedure(limiter_ftype), pointer, nopass :: limiter      !< limiter function
-    real(WP) :: upratio_divzero_eps                           !< softening epsilon for upwind ratio
+    procedure(limiter_ftype), pointer, nopass :: limiter!< limiter function
+    real(WP) :: upratio_divzero_eps                     !< softening epsilon for upwind ratio
 
     ! boundary condition list
-    integer :: nbc                                            !< number of bcond for our solver
-    !TODO mft
-    real(WP), dimension(:), allocatable :: mfr                !< mFR through each bcond
-    real(WP), dimension(:), allocatable :: area               !< area for each bcond
-    real(WP) :: correctable_area                              !< area of bcond that can be corrected
-    type(bcond), pointer :: first_bc                          !< list of bcond for our solver
+    integer :: nbc                                      !< number of bcond for our solver
+    type(muscl_bc), pointer :: first_bc                 !< list of bcond for our solver
 
     ! flow variables, parameter arrays
-    real(WP), dimension(:,:,:,:), pointer :: Uc, dU       !< state variables
-    real(WP), dimension(:,:,:,:), pointer :: params       !< params for evals/rsolver
+    real(WP), dimension(:,:,:,:), pointer :: Uc, dU     !< state variables
+    real(WP), dimension(:,:,:,:), pointer :: params     !< params for evals/rsolver
 
     !TODO get this working
     ! transsonic flags
-    !integer(1), dimension(:,:,:), allocatable :: trans        !< bitwise entropy violation check xyz
+    !integer(1), dimension(:,:,:), allocatable :: trans !< bitwise entropy violation check xyz
     !integer :: trans_total
     !logical :: have_trans_flags
 
@@ -104,34 +84,34 @@ module muscl_class
     integer(1), dimension(:,:,:), allocatable :: wavebcs
 
     ! CFL numbers
-    real(WP) :: CFL_x, CFL_y, CFL_z                       !< global CFL numbers (over dt)
-    real(WP) :: CFL_safety                                !< CFL modifier when using cached value
+    real(WP) :: CFL_x, CFL_y, CFL_z                     !< global CFL numbers (over dt)
+    real(WP) :: CFL_safety                              !< CFL modifier when using cached value
     logical :: have_CFL_x_estim, have_CFL_y_estim, have_CFL_z_estim
     logical :: have_CFL_x_exact, have_CFL_y_exact, have_CFL_z_exact
 
     ! monitoring quantities
-    real(WP), dimension(:), pointer :: Umin, Umax         !< state variable range
-    real(WP), dimension(:), pointer :: Uint               !< integral of state vars over domain
+    real(WP), dimension(:), pointer :: Umin, Umax       !< state variable range
+    real(WP), dimension(:), pointer :: Uint             !< integral of state vars over domain
     logical :: have_Urange
 
   contains
 
     ! standard interface
-    procedure :: print => muscl_print                         !< output solver to the screen
-    procedure :: add_bcond                                    !< add a boundary condition
-    procedure :: get_bcond                                    !< get a boundary condition
-    procedure :: apply_bcond                                  !< apply all boundary conditions
-    procedure :: get_cfl                                      !< get maximum CFL
-    procedure :: get_range                                    !< calculate min/max field values
-    procedure :: get_min => get_range                         !< compatibility
-    procedure :: get_max => get_range                         !< compatibility
-    !procedure :: get_mfr                                      !< mfr at ea bcond in last step
-    procedure :: compute_dU_x, compute_dU_y, compute_dU_z     !< take step
+    procedure :: print => muscl_print                   !< output solver to the screen
+    procedure :: add_bcond                              !< add a boundary condition
+    procedure :: get_bcond                              !< get a boundary condition
+    procedure :: apply_bcond                            !< apply all boundary conditions
+    procedure :: get_cfl                                !< get maximum CFL
+    procedure :: get_range                              !< calculate min/max field values
+    procedure :: get_min => get_range                   !< compatibility
+    procedure :: get_max => get_range                   !< compatibility
+    !procedure :: get_mfr                               !< mfr at ea bcond in last step
+    procedure :: calc_dU_x, calc_dU_y, calc_dU_z        !< take step
 
     ! muscl specific
     !TODO get this working
-    !procedure :: check_transonic                              !< check for transonic waves
-    procedure :: recalc_cfl                                   !< calculate maximum CFL
+    !procedure :: check_transonic                       !< check for transonic waves
+    procedure :: recalc_cfl                             !< calculate maximum CFL
 
   end type muscl
 
@@ -172,31 +152,11 @@ contains
     this%rsolv_x => rsolv_x; this%rsolv_y => rsolv_y; this%rsolv_z => rsolv_z;
 
     ! limiting
-    select case (lim)
-    case (UPWIND)
-      this%limiter => limiter_upwind
-    case (LAXWEND)
-      this%limiter => limiter_laxwend
-    case (BEAMWARM)
-      this%limiter => limiter_beamwarm
-    case (FROMM)
-      this%limiter => limiter_fromm
-    case (MINMOD)
-      this%limiter => limiter_minmod
-    case (SUPERBEE)
-      this%limiter => limiter_superbee
-    case (MC)
-      this%limiter => limiter_mc
-    case (VANLEER)
-      this%limiter => limiter_vanleer
-    case default
-      call die("could not find limiter")
-    end select
+    this%limiter => get_limiter(lim)
     this%upratio_divzero_eps = upratio_divzero_eps
 
-    ! boundary condition list
-    this%nbc = 0
-    this%first_bc => NULL()
+    ! initialize boundary condition list
+    this%nbc = 0; this%first_bc => NULL();
 
     ! get array sizes
     imino = this%cfg%imino_; imaxo = this%cfg%imaxo_;
@@ -256,7 +216,7 @@ contains
     integer(1), intent(in) :: type
     procedure(locator_gen_ftype) :: locator
     character(len=2), intent(in) :: dir
-    type(bcond), pointer :: new_bc
+    type(muscl_bc), pointer :: new_bc
     integer :: i, j, k, n
     integer(1) :: wbc
 
@@ -307,11 +267,11 @@ contains
     implicit none
     class(muscl), intent(inout) :: this
     character(len=*), intent(in) :: name
-    type(bcond), pointer, intent(out) :: my_bc
+    type(muscl_bc), pointer, intent(out) :: my_bc
 
     my_bc => this%first_bc
     do while (associated(my_bc))
-      if (trim(my_bc%name).eq.trim(name)) return
+      if (trim(my_bc%name) .eq. trim(name)) return
       my_bc => my_bc%next
     end do
 
@@ -330,7 +290,7 @@ contains
     integer(1) :: masked_type
     logical, dimension(this%N) :: vel_mask
     integer :: i, j, k, m, n, iref, jref, kref
-    type(bcond), pointer :: my_bc
+    type(muscl_bc), pointer :: my_bc
 
     ! Traverse bcond list
     my_bc => this%first_bc
@@ -395,7 +355,7 @@ contains
             end do
           case (1_1)
             call die('[muscl apply_bcond] Unknown bcond type')
-          case default 
+          case default
             call die('[muscl apply_bcond] Unknown bcond type')
         end select
 
@@ -500,11 +460,8 @@ contains
 
   end subroutine get_range
 
-  !> get mass flow rate through boundaries at previous step
-  !TODO
-
   !> compute dU in x direction
-  subroutine compute_dU_x(this, dt)
+  subroutine calc_dU_x(this, dt)
     use messager, only: die
     use mpi_f08,  only: MPI_ALLREDUCE, MPI_MAX
     use parallel, only: MPI_REAL_WP
@@ -544,10 +501,10 @@ contains
     this%have_CFL_x_estim = .true.; this%have_CFL_x_exact = .false.;
     this%have_Urange = .false.
 
-  end subroutine compute_dU_x
+  end subroutine calc_dU_x
 
   !> compute dU in y direction
-  subroutine compute_dU_y(this, dt)
+  subroutine calc_dU_y(this, dt)
     use messager, only: die
     use mpi_f08,  only: MPI_ALLREDUCE, MPI_MAX
     use parallel, only: MPI_REAL_WP
@@ -595,10 +552,10 @@ contains
     this%have_CFL_y_estim = .true.; this%have_CFL_y_exact = .false.;
     this%have_Urange = .false.
 
-  end subroutine compute_dU_y
+  end subroutine calc_dU_y
 
   !> compute dU in z direction
-  subroutine compute_dU_z(this, dt)
+  subroutine calc_dU_z(this, dt)
     use messager, only: die
     use mpi_f08,  only: MPI_ALLREDUCE, MPI_MAX
     use parallel, only: MPI_REAL_WP
@@ -647,7 +604,7 @@ contains
     this%have_CFL_z_estim = .true.; this%have_CFL_z_exact = .false.;
     this%have_Urange = .false.
 
-  end subroutine compute_dU_z
+  end subroutine calc_dU_z
 
   ! requires two ghost cells even if using the `upwind' limiter
   ! left as an independent function, but called is by class

@@ -308,15 +308,15 @@ contains
       ! take step (Strang)
       !call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
-      call fs%compute_dU_x(0.5 * time%dt)
+      call fs%calc_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
       !call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
-      call fs%compute_dU_y(time%dt)
+      call fs%calc_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
       !call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
-      call fs%compute_dU_x(0.5 * time%dt)
+      call fs%calc_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
 
       ! Output to ensight

@@ -2,7 +2,7 @@
 !> contains necessary functions for using the muscl class (or other general
 !> hyperbolic solvers) to solve the Euler equations for an ideal (gamma) gas
 
-!> Written by John Wakefield in December 2022
+!> Originally written by John P Wakefield in December 2022.
 
 module hyperbolic_euler
   use precision,     only: WP
@@ -52,12 +52,9 @@ contains
 
     name_actual = euler_muscl_name
 
-    evals_x_ptr => euler_evals_x
-    evals_y_ptr => euler_evals_y
-    evals_z_ptr => euler_evals_z
-    rsolv_x_ptr => euler_rsolv_x
-    rsolv_y_ptr => euler_rsolv_y
-    rsolv_z_ptr => euler_rsolv_z
+    evals_x_ptr => euler_evals_x; rsolv_x_ptr => euler_rsolv_x;
+    evals_y_ptr => euler_evals_y; rsolv_y_ptr => euler_rsolv_y;
+    evals_z_ptr => euler_evals_z; rsolv_z_ptr => euler_rsolv_z;
 
     ! build solver
     solver = muscl(cfg, name_actual, 5, 1, evals_x_ptr, evals_y_ptr,          &

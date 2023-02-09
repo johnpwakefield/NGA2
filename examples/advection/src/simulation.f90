@@ -2,7 +2,8 @@
 module simulation
   use precision,            only: WP
   use geometry,             only: cfg
-  use muscl_class,          only: muscl, SUPERBEE
+  use hyperbolic,           only: SUPERBEE
+  use muscl_class,          only: muscl
   use hyperbolic_advection, only: make_advec_muscl
   use timetracker_class,    only: timetracker
   use ensight_class,        only: ensight
@@ -190,7 +191,6 @@ contains
 
     ! Add Ensight output
     create_ensight: block
-      use ensight_class, only: add_rscalar
       use string, only: str_short
       integer :: i
       character(len=4) :: istr
@@ -207,17 +207,13 @@ contains
       do i = 1, numfields
         scl_ptr => fs%Uc(i,:,:,:)
         write(istr,'(I2.2)') i
-        !WTF?
-        !call ens_out%add_scalar('U'//istr, scl_ptr)
-        call add_rscalar(ens_out, 'U'//istr, scl_ptr)
+        call ens_out%add_scalar('U'//istr, scl_ptr)
       end do
 
       do i = 1, numparams
         scl_ptr => fs%params(i,:,:,:)
         write(istr,'(I2.2)') i
-        !WTF?
-        !call ens_out%add_scalar('p'//istr, scl_ptr)
-        call add_rscalar(ens_out, 'p'//istr, scl_ptr)
+        call ens_out%add_scalar('p'//istr, scl_ptr)
       end do
 
       ! Output to ensight
@@ -286,15 +282,15 @@ contains
       ! take step (Strang)
       fs%dU(:, :, :, :) = 0.0_WP
       !call fs%apply_bcond(time%t, time%dt)
-      call fs%compute_dU_x(0.5 * time%dt)
+      call fs%calc_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:, :, :, :) = 0.0_WP
       !call fs%apply_bcond(time%t, time%dt)
-      call fs%compute_dU_y(time%dt)
+      call fs%calc_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:, :, :, :) = 0.0_WP
       !call fs%apply_bcond(time%t, time%dt)
-      call fs%compute_dU_x(0.5 * time%dt)
+      call fs%calc_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
 
       ! Output to ensight

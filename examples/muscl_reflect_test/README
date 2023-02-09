@@ -1,1 +1,2 @@
-a spherical detonation based off the Sod problem
+The 'detonation' example, but with an initial velocity toward a reflecting
+wall.

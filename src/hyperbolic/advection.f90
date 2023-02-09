@@ -2,13 +2,14 @@
 !> contains necessary functions for using the muscl class (or other general hyperbolic
 !> solvers) to solve basic advection problems
 
-!> written by John P Wakefield in December 2022
+!> Originally written by John P Wakefield in December 2022.
 
 module hyperbolic_advection
   use precision,    only: WP
   use string,       only: str_medium
   use config_class, only: config
-  use muscl_class,  only: muscl, constructor, eigenvals_ftype, rsolver_ftype, limiter_ftype
+  use hyperbolic,   only: eigenvals_ftype, rsolver_ftype, limiter_ftype
+  use muscl_class,  only: muscl
   implicit none
 
   real(WP), parameter :: advec_muscl_cflsafety = 0.99_WP
@@ -32,16 +33,13 @@ contains
 
     name_actual = advec_muscl_name
 
-    evals_x_ptr => advec_evals_x
-    evals_y_ptr => advec_evals_y
-    evals_z_ptr => advec_evals_z
-    rsolv_x_ptr => advec_rsolv_x
-    rsolv_y_ptr => advec_rsolv_y
-    rsolv_z_ptr => advec_rsolv_z
+    evals_x_ptr => advec_evals_x; rsolv_x_ptr => advec_rsolv_x;
+    evals_y_ptr => advec_evals_y; rsolv_y_ptr => advec_rsolv_y;
+    evals_z_ptr => advec_evals_z; rsolv_z_ptr => advec_rsolv_z;
 
     ! build solver
-    solver = muscl(cfg, name_actual, N, 3, evals_x_ptr, evals_y_ptr,      &
-      & evals_z_ptr, rsolv_x_ptr, rsolv_y_ptr, rsolv_z_ptr, limiter,  &
+    solver = muscl(cfg, name_actual, N, 3, evals_x_ptr, evals_y_ptr,          &
+      & evals_z_ptr, rsolv_x_ptr, rsolv_y_ptr, rsolv_z_ptr, limiter,          &
       & advec_muscl_divzero_eps, advec_muscl_cflsafety)
 
     ! set velocity
@@ -109,9 +107,7 @@ contains
     rs(:,2) = max(v, 0.0_WP)
     rs(:,3) = Ur(:) - Ul(:)
 
-    do i = 1, size(Ul, 1)
-      rs(i,i+4) = 1.0_WP
-    end do
+    rs(1:size(Ul,1),5:(size(Ul,1)+4)) = 1.0_WP
 
   end subroutine
 

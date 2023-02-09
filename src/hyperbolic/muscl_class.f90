@@ -24,6 +24,7 @@ module muscl_class
   use string,         only: str_medium
   use config_class,   only: config
   use iterator_class, only: iterator
+  use hyperbolic
   implicit none
   private
 
@@ -32,16 +33,6 @@ module muscl_class
 
   ! expose interfaces
   public :: eigenvals_ftype, rsolver_ftype, limiter_ftype
-
-  ! limiter names
-  integer(1), parameter, public :: UPWIND   = 0_1
-  integer(1), parameter, public :: LAXWEND  = 1_1
-  integer(1), parameter, public :: BEAMWARM = 2_1
-  integer(1), parameter, public :: FROMM    = 3_1
-  integer(1), parameter, public :: MINMOD   = 4_1
-  integer(1), parameter, public :: SUPERBEE = 5_1
-  integer(1), parameter, public :: MC       = 6_1
-  integer(1), parameter, public :: VANLEER  = 7_1
 
   ! List of known available bcond types for this solver
   ! here 'right' means bcond direction +1
@@ -60,31 +51,6 @@ module muscl_class
   ! rs(:, 3)       wave strengths
   ! rs(:, 4)       (projected) source strengths
   ! rs(:, 5:(N+4)) (linearized) eigenvectors
-
-  interface
-    pure subroutine eigenvals_ftype(N, params, u, evals)
-      use precision, only: WP
-      implicit none
-      integer, intent(in) :: N
-      real(WP), dimension(:), intent(in) :: params
-      real(WP), dimension(N), intent(in) :: u
-      real(WP), dimension(N), intent(out) :: evals
-    end subroutine
-    pure subroutine rsolver_ftype(N, pl, ul, pr, ur, rs)
-      use precision, only: WP
-      implicit none
-      integer, intent(in) :: N
-      real(WP), dimension(:), intent(in) :: pl, pr
-      real(WP), dimension(N), intent(in) :: ul, ur
-      real(WP), dimension(:,:), intent(out) :: rs
-    end subroutine
-    pure function limiter_ftype(r) result(phi)
-      use precision, only: WP
-      implicit none
-      real(WP), intent(in) :: r
-      real(WP) :: phi
-    end function
-  end interface
 
   !> boundary conditions for the hyperbolic solver
   type :: bcond
@@ -300,7 +266,7 @@ contains
     new_bc%type = type
     new_bc%itr = iterator(pg=this%cfg, name=new_bc%name, locator=locator)
     select case (lowercase(dir))
-    case ('c');                    new_bc%dir = 0_1
+    case ('c');              new_bc%dir = 0_1
     case ('-x', 'x-', 'xl'); new_bc%dir = 2_1
     case ('+x', 'x+', 'xr'); new_bc%dir = 1_1
     case ('-y', 'y-', 'yl'); new_bc%dir = 4_1
@@ -336,7 +302,7 @@ contains
   end subroutine add_bcond
 
   !> get a boundary condition
-  subroutine get_bcond(this,name,my_bc)
+  subroutine get_bcond(this, name, my_bc)
     use messager, only: die
     implicit none
     class(muscl), intent(inout) :: this
@@ -703,9 +669,9 @@ contains
     real(WP), dimension(N) :: phil, phir
     integer :: j
 
-    call rsolver(N, params(:,1), U(:,1), params(:,2), U(:,2), ll)
-    call rsolver(N, params(:,2), U(:,2), params(:,3), U(:,3), lc)
-    call rsolver(N, params(:,3), U(:,3), params(:,4), U(:,4), rc)
+    call rsolver(P, N, params(:,1), U(:,1), params(:,2), U(:,2), ll)
+    call rsolver(P, N, params(:,2), U(:,2), params(:,3), U(:,3), lc)
+    call rsolver(P, N, params(:,3), U(:,3), params(:,4), U(:,4), rc)
 
     call handle_wavebc(wbcs(1), ll)
     call handle_wavebc(wbcs(2), lc)
@@ -718,7 +684,7 @@ contains
     call compute_limval(N, limfun, eps, ll, lc, rc, phil)
 
     do j = 3, M-2
-      call rsolver(N, params(:,j+1), U(:,j+1), params(:,j+2), U(:,j+2), rr)
+      call rsolver(P, N, params(:,j+1), U(:,j+1), params(:,j+2), U(:,j+2), rr)
       call handle_wavebc(wbcs(j+1), rr)
       call compute_limval(N, limfun, eps, lc, rc, rr, phir)
       CFLmax = max(CFLmax, maxval(abs(rr(:,1:2))) / min(dxs(j+1), dxs(j+2)))
@@ -978,11 +944,11 @@ contains
     do k = this%cfg%kmin_, this%cfg%kmax_
       do j = this%cfg%jmin_, this%cfg%jmax_
         do i = this%cfg%imin_, this%cfg%imax_
-          call this%evals_x(this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
+          call this%evals_x(this%P, this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
           task_CFL_x = max(task_CFL_x, this%cfg%dxi(i) * maxval(abs(evals)))
-          call this%evals_y(this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
+          call this%evals_y(this%P, this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
           task_CFL_y = max(task_CFL_y, this%cfg%dyi(i) * maxval(abs(evals)))
-          call this%evals_z(this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
+          call this%evals_z(this%P, this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
           task_CFL_z = max(task_CFL_z, this%cfg%dzi(i) * maxval(abs(evals)))
         end do
       end do
@@ -1004,67 +970,6 @@ contains
     this%have_CFL_z_estim = .true.; this%have_CFL_z_exact = .true.;
 
   end subroutine recalc_cfl
-
-  !! limiter definitions
-
-  ! limiter functions
-  pure function limiter_upwind(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = r
-    phi = 0.0
-  end function
-
-  pure function limiter_laxwend(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = r
-    phi = 1.0
-  end function
-
-  pure function limiter_beamwarm(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = r
-  end function
-
-  pure function limiter_fromm(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = 0.5_WP * (r + 1.0_WP)
-  end function
-
-  pure function limiter_minmod(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = max(0.0_WP, min(1.0_WP, r))
-  end function
-
-  pure function limiter_superbee(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = max(0.0_WP, min(1.0_WP, 2.0_WP * r), min(2.0_WP, r))
-  end function
-
-  pure function limiter_mc(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = max(0.0_WP, min((1.0_WP + r) / 2.0_WP, 2.0_WP, 2.0_WP * r))
-  end function
-
-  pure function limiter_vanleer(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = (r + abs(r)) / (1.0_WP + abs(r))
-  end function
 
 end module
 

@@ -56,10 +56,10 @@ contains
 
   end function make_advec_muscl
 
-  pure subroutine advec_evals_x(N, params, U, evals)
+  pure subroutine advec_evals_x(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: U
     real(WP), dimension(N), intent(out) :: evals
 
@@ -70,10 +70,10 @@ contains
 
   end subroutine advec_evals_x
 
-  pure subroutine advec_evals_y(N, params, U, evals)
+  pure subroutine advec_evals_y(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: U
     real(WP), dimension(N), intent(out) :: evals
 
@@ -84,10 +84,10 @@ contains
 
   end subroutine advec_evals_y
 
-  pure subroutine advec_evals_z(N, params, U, evals)
+  pure subroutine advec_evals_z(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: U
     real(WP), dimension(N), intent(out) :: evals
 
@@ -115,9 +115,9 @@ contains
 
   end subroutine
 
-  pure subroutine advec_rsolv_x(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine advec_rsolv_x(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 
@@ -125,9 +125,9 @@ contains
 
   end subroutine advec_rsolv_x
 
-  pure subroutine advec_rsolv_y(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine advec_rsolv_y(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 
@@ -135,9 +135,9 @@ contains
 
   end subroutine advec_rsolv_y
 
-  pure subroutine advec_rsolv_z(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine advec_rsolv_z(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 

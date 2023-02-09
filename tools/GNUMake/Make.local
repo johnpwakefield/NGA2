@@ -41,7 +41,7 @@ endif
 
 # When I run on my local desktop, I like to add this gfortran flag.
 FFLAGS   += -fcheck=array-temps
-F90FLAGS += -fcheck=array-temps
+F90FLAGS += -fcheck=array-temps # --std=f2008
 
 
 # Instead of linking to static gfortran library, I like to use shared libraries.
@@ -69,3 +69,4 @@ CFLAGS = MY_AWESOME_CFLAGS
 ifeq ($(lowercase_comp),pg?compiler)
   CXXFLAGS := $(filter-out --c++11,$(CXXFLAGS))
 endif
+

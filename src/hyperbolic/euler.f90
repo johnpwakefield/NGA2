@@ -5,11 +5,12 @@
 !> Written by John Wakefield in December 2022
 
 module hyperbolic_euler
-  use precision,    only: WP
-  use string,       only: str_medium
-  use config_class, only: config
-  use muscl_class,  only: muscl, VANLEER, eigenvals_ftype, rsolver_ftype,     &
-    & limiter_ftype
+  use precision,     only: WP
+  use string,        only: str_medium
+  use config_class,  only: config
+  use hyperbolic,    only: VANLEER, eigenvals_ftype, rsolver_ftype, limiter_ftype, flux_ftype
+  use muscl_class,   only: muscl
+  !use rusanov_class, only: rusanov
   implicit none
 
   real(WP), parameter :: euler_muscl_cflsafety = 0.92_WP
@@ -24,7 +25,7 @@ module hyperbolic_euler
 
 contains
 
-  !> factory
+  !> muscl factory
   function make_euler_muscl(cfg, limiter, gma) result(solver)
     implicit none
     type(muscl) :: solver
@@ -73,6 +74,43 @@ contains
 
   end function make_euler_muscl
 
+  !> rusanov factory
+  !function make_euler_rusanov(cfg, gma) result(solver)
+  !  implicit none
+  !  type(rusanov) :: solver
+  !  class(config), target, intent(in) :: cfg
+  !  real(WP), optional, intent(in) :: gma
+  !  real(WP) :: gma_actual
+  !  procedure(eigenvals_ftype), pointer :: evals_x_ptr, evals_y_ptr, evals_z_ptr
+  !  procedure(flux_ftype), pointer :: flux_x_ptr, flux_y_ptr, flux_z_ptr
+
+  !  if (present(gma)) then
+  !    gma_actual = gma
+  !  else
+  !    gma_actual = DIATOMIC_GAMMA
+  !  end if
+
+  !  evals_x_ptr => euler_evals_x
+  !  evals_y_ptr => euler_evals_y
+  !  evals_z_ptr => euler_evals_z
+  !  flux_x_ptr => euler_flux_x
+  !  flux_y_ptr => euler_flux_y
+  !  flux_z_ptr => euler_flux_z
+
+  !  ! build solver
+  !  solver = rusanov(cfg, 'EULER_RUSANOV', 5, 1, evals_x_ptr, evals_y_ptr,    &
+  !    & evals_z_ptr, flux_x_ptr, flux_y_ptr, flux_z_ptr)
+
+  !  ! set param array to hold gamma
+  !  solver%params(1,:,:,:) = gma_actual
+
+  !  ! set velocity mask
+  !  solver%vel_mask_x(:) = (/ .false., .true., .false., .false., .false. /)
+  !  solver%vel_mask_y(:) = (/ .false., .false., .true., .false., .false. /)
+  !  solver%vel_mask_z(:) = (/ .false., .false., .false., .true., .false. /)
+
+  !end function make_euler_rusanov
+
   !> Convert to Physical Coordinates (velocity and pressure to momentum and energy)
   pure subroutine euler_tophys(gma, cons, phys)
     implicit none
@@ -107,10 +145,56 @@ contains
 
   end subroutine
 
-  pure subroutine euler_evals_x(N, params, U, evals)
+  pure subroutine euler_flux_x(P, N, params, U, flux)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
+    real(WP), dimension(N), intent(in) :: u
+    real(WP), dimension(N), intent(out) :: flux
+    real(WP) :: pressure
+
+    pressure = (params(1) - 1.0_WP) * (U(3) - 0.5_WP * U(2)**2 / U(1))
+
+    flux(1) = U(2)
+    flux(2) = U(2)**2 / U(1) + pressure
+    flux(3) = U(2) * U(3) / U(1)
+    flux(4) = U(2) * U(4) / U(1)
+    flux(5) = U(2) / U(1) * (U(5) + pressure)
+
+  end subroutine euler_flux_x
+
+  pure subroutine euler_flux_y(P, N, params, U, flux)
+    implicit none
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
+    real(WP), dimension(N), intent(in) :: u
+    real(WP), dimension(N), intent(out) :: flux
+    real(WP), dimension(5) :: u_permute
+
+    u_permute(:) = u(:); u_permute(2) = u(3); u_permute(3) = u(2);
+
+    call euler_flux_x(P, N, params, u_permute, flux)
+
+  end subroutine euler_flux_y
+
+  pure subroutine euler_flux_z(P, N, params, U, flux)
+    implicit none
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
+    real(WP), dimension(N), intent(in) :: u
+    real(WP), dimension(N), intent(out) :: flux
+    real(WP), dimension(N) :: u_permute
+
+    u_permute(:) = u(:); u_permute(2) = u(4); u_permute(4) = u(2);
+
+    call euler_flux_x(P, N, params, u_permute, flux)
+
+  end subroutine euler_flux_z
+
+  pure subroutine euler_evals_x(P, N, params, U, evals)
+    implicit none
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: u
     real(WP), dimension(N), intent(out) :: evals
 
@@ -118,10 +202,10 @@ contains
 
   end subroutine euler_evals_x
 
-  pure subroutine euler_evals_y(N, params, U, evals)
+  pure subroutine euler_evals_y(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: u
     real(WP), dimension(N), intent(out) :: evals
     real(WP), dimension(5) :: u_permute
@@ -132,10 +216,10 @@ contains
 
   end subroutine euler_evals_y
 
-  pure subroutine euler_evals_z(N, params, U, evals)
+  pure subroutine euler_evals_z(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: u
     real(WP), dimension(N), intent(out) :: evals
     real(WP), dimension(N) :: u_permute
@@ -163,9 +247,9 @@ contains
 
   end subroutine euler_evals_1d
 
-  pure subroutine euler_rsolv_x(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine euler_rsolv_x(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 
@@ -173,9 +257,9 @@ contains
 
   end subroutine euler_rsolv_x
 
-  pure subroutine euler_rsolv_y(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine euler_rsolv_y(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
     real(WP), dimension(N) :: Uln, Urn
@@ -190,9 +274,9 @@ contains
 
   end subroutine euler_rsolv_y
 
-  pure subroutine euler_rsolv_z(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine euler_rsolv_z(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
     real(WP), dimension(N) :: Uln, Urn

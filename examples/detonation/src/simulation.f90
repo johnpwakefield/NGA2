@@ -203,7 +203,6 @@ contains
 
     ! Add Ensight output
     create_ensight: block
-      use ensight_class, only: add_rscalar
       use string, only: str_short
       real(WP), dimension(:,:,:), pointer :: scl_ptr
 
@@ -220,19 +219,19 @@ contains
 
       ! Add variables to output
       scl_ptr => phys_out(1,:,:,:)
-      call add_rscalar(ens_out, 'density', scl_ptr)
+      call ens_out%add_scalar('density', scl_ptr)
       scl_ptr => phys_out(2,:,:,:)
-      call add_rscalar(ens_out, 'x_velocity', scl_ptr)
+      call ens_out%add_scalar('x_velocity', scl_ptr)
       scl_ptr => phys_out(3,:,:,:)
-      call add_rscalar(ens_out, 'y_velocity', scl_ptr)
+      call ens_out%add_scalar('y_velocity', scl_ptr)
       scl_ptr => phys_out(4,:,:,:)
-      call add_rscalar(ens_out, 'z_velocity', scl_ptr)
+      call ens_out%add_scalar('z_velocity', scl_ptr)
       scl_ptr => phys_out(5,:,:,:)
-      call add_rscalar(ens_out, 'pressure', scl_ptr)
+      call ens_out%add_scalar('pressure', scl_ptr)
       scl_ptr => fs%params(1,:,:,:)
-      call add_rscalar(ens_out, 'gamma', scl_ptr)
+      call ens_out%add_scalar('gamma', scl_ptr)
       scl_ptr => phys_out(6,:,:,:)
-      call add_rscalar(ens_out, 'Ma', scl_ptr)
+      call ens_out%add_scalar('Ma', scl_ptr)
 
       ! Output to ensight
       if (ens_evt%occurs()) then

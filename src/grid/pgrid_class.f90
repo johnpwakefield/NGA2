@@ -244,7 +244,7 @@ contains
       use parallel, only: MPI_REAL_WP,MPI_REAL_SP
       implicit none
       class(pgrid), intent(inout) :: self
-      integer :: strat_,ierr,q,r
+      integer :: ierr,q,r
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.

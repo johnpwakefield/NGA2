@@ -516,7 +516,7 @@ contains
 
   end subroutine calc_dU_z
 
-  ! requires two ghost cells even if using the `upwind' limiter
+  ! requires one ghost cell
   ! left as an independent function, but called is by class
   pure subroutine rusanov_1d(N, P, M, flux, evals, dxs, dt, params, U, dU)
     implicit none

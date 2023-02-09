@@ -8,10 +8,6 @@ module pgrid_class
    implicit none
    private
    
-   !> Default parallelization strategy
-   character(len=str_medium), parameter :: defstrat='fewest_dir'
-   integer, parameter :: defmincell=4
-   
    ! Expose type/constructor/methods
    public :: pgrid
    
@@ -248,7 +244,7 @@ contains
       use parallel, only: MPI_REAL_WP,MPI_REAL_SP
       implicit none
       class(pgrid), intent(inout) :: self
-      integer :: ierr,q,r
+      integer :: strat_,ierr,q,r
       type(MPI_Comm) :: tmp_comm
       integer, parameter :: ndims=3
       logical, parameter :: reorder=.true.

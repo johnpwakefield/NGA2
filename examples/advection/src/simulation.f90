@@ -81,11 +81,8 @@ contains
     use messager, only: die
     implicit none
 
-    integer :: numfields, numparams
+    integer :: numfields
     character, dimension(:), allocatable :: fields
-
-    ! num params is 3 here; this will have to be changed for other systems
-    numparams = 3
 
     ! read shapes
     read_shapes: block
@@ -194,7 +191,7 @@ contains
       use string, only: str_short
       integer :: i
       character(len=4) :: istr
-      real(WP), dimension(:,:,:), pointer :: scl_ptr
+      real(WP), dimension(:,:,:), pointer :: ptr1, ptr2, ptr3
 
       ! Create Ensight output from cfg
       ens_out=ensight(cfg=cfg, name='AdvectionTest')
@@ -205,16 +202,15 @@ contains
 
       ! Add variables to output
       do i = 1, numfields
-        scl_ptr => fs%Uc(i,:,:,:)
+        ptr1 => fs%Uc(i,:,:,:)
         write(istr,'(I2.2)') i
-        call ens_out%add_scalar('U'//istr, scl_ptr)
+        call ens_out%add_scalar('U'//istr, ptr1)
       end do
 
-      do i = 1, numparams
-        scl_ptr => fs%params(i,:,:,:)
-        write(istr,'(I2.2)') i
-        call ens_out%add_scalar('p'//istr, scl_ptr)
-      end do
+      ptr1 => fs%params(1,:,:,:)
+      ptr2 => fs%params(2,:,:,:)
+      ptr3 => fs%params(3,:,:,:)
+      call ens_out%add_vector('velocity', ptr1, ptr2, ptr3)
 
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -223,7 +219,6 @@ contains
 
     ! Create a monitor file
     create_monitor: block
-      use monitor_class, only: add_column_real
       use string, only: str_short
       character(len=str_short) :: fieldname
       integer :: i
@@ -240,17 +235,12 @@ contains
       call mfile%add_column(time%dt, 'Timestep size')
       call mfile%add_column(time%cfl, 'Maximum CFL')
       do i = 1, numfields
-        ! WTF?
-        !call mfile%add_column(real_ptr, fields(i:i)//'min')
-        !call mfile%add_column(real_ptr, fields(i:i)//'max')
-        fieldname(1:1) = fields(i)
-        fieldname(2:4) = 'min'
+        write(fieldname,'("[",a,"]min")') fields(i)
         real_ptr => fs%Umin(i)
-        call add_column_real(mfile, real_ptr, fieldname)
-        fieldname(1:1) = fields(i)
-        fieldname(2:4) = 'max'
+        call mfile%add_column(real_ptr, fieldname)
+        write(fieldname,'("[",a,"]max")') fields(i)
         real_ptr => fs%Umax(i)
-        call add_column_real(mfile, real_ptr, fieldname)
+        call mfile%add_column(real_ptr, fieldname)
       end do
       call mfile%write()
 

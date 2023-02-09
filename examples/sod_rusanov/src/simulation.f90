@@ -206,7 +206,6 @@ contains
 
     ! Create a monitor file
     create_monitor: block
-      use monitor_class, only: add_column_real
       use string, only: str_short
       real(WP), pointer :: real_ptr
 
@@ -224,25 +223,25 @@ contains
       !call mfile%add_column(real_ptr, fields(i:i)//'min')
       !call mfile%add_column(real_ptr, fields(i:i)//'max')
       real_ptr => fs%Umin(1)
-      call add_column_real(mfile, real_ptr, 'dens_min')
+      call mfile%add_column(real_ptr, 'dens_min')
       real_ptr => fs%Umax(1)
-      call add_column_real(mfile, real_ptr, 'dens_max')
+      call mfile%add_column(real_ptr, 'dens_max')
       real_ptr => fs%Umin(2)
-      call add_column_real(mfile, real_ptr, 'momx_min')
+      call mfile%add_column(real_ptr, 'momx_min')
       real_ptr => fs%Umax(2)
-      call add_column_real(mfile, real_ptr, 'momx_max')
+      call mfile%add_column(real_ptr, 'momx_max')
       real_ptr => fs%Umin(3)
-      call add_column_real(mfile, real_ptr, 'momy_min')
+      call mfile%add_column(real_ptr, 'momy_min')
       real_ptr => fs%Umax(3)
-      call add_column_real(mfile, real_ptr, 'momy_max')
+      call mfile%add_column(real_ptr, 'momy_max')
       real_ptr => fs%Umin(4)
-      call add_column_real(mfile, real_ptr, 'momz_min')
+      call mfile%add_column(real_ptr, 'momz_min')
       real_ptr => fs%Umax(4)
-      call add_column_real(mfile, real_ptr, 'momz_max')
+      call mfile%add_column(real_ptr, 'momz_max')
       real_ptr => fs%Umin(5)
-      call add_column_real(mfile, real_ptr, 'totE_min')
+      call mfile%add_column(real_ptr, 'totE_min')
       real_ptr => fs%Umax(5)
-      call add_column_real(mfile, real_ptr, 'totE_max')
+      call mfile%add_column(real_ptr, 'totE_max')
       call mfile%write()
 
       ! Create CFL monitor
@@ -259,15 +258,15 @@ contains
       call consfile%add_column(time%n, 'Timestep number')
       call consfile%add_column(time%t, 'Time')
       real_ptr => fs%Uint(1)
-      call add_column_real(consfile, real_ptr, 'dens_int')
+      call consfile%add_column(real_ptr, 'dens_int')
       real_ptr => fs%Uint(2)
-      call add_column_real(consfile, real_ptr, 'momx_int')
+      call consfile%add_column(real_ptr, 'momx_int')
       real_ptr => fs%Uint(3)
-      call add_column_real(consfile, real_ptr, 'momy_int')
+      call consfile%add_column(real_ptr, 'momy_int')
       real_ptr => fs%Uint(4)
-      call add_column_real(consfile, real_ptr, 'momz_int')
+      call consfile%add_column(real_ptr, 'momz_int')
       real_ptr => fs%Uint(5)
-      call add_column_real(consfile, real_ptr, 'totE_int')
+      call consfile%add_column(real_ptr, 'totE_int')
       call consfile%write()
 
     end block create_monitor

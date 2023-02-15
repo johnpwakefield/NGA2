@@ -12,7 +12,7 @@ nz :	1
 # Fluid properties
 Dynamic viscosity :	  0.001
 Dynamic diffusivity : 0.001
-Jet density :     1.0
+Jet density :     0.5
 Coflow density :  1.0
 Jet diameter :    1.0
 Jet velocity :    1.0

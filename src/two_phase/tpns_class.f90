@@ -888,20 +888,14 @@ contains
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,face,dir,canCorrect)
-      use string,   only: lowercase
-      use messager, only: die
+      use string,         only: lowercase
+      use messager,       only: die
+      use iterator_class, only: locator_ftype
       implicit none
       class(tpns), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
+      procedure(locator_ftype) :: locator
       character(len=1), intent(in) :: face
       integer, intent(in) :: dir
       logical, intent(in) :: canCorrect
@@ -1647,7 +1641,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))!*2.0_WP*this%rho_U(i,j,k)/(this%rho_l+this%rho_g)
                ! Y face
                mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
                if (mysurf.gt.0.0_WP) then
@@ -1655,7 +1649,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))!*2.0_WP*this%rho_V(i,j,k)/(this%rho_l+this%rho_g)
                ! Z face
                mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
                if (mysurf.gt.0.0_WP) then
@@ -1663,7 +1657,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))!*2.0_WP*this%rho_W(i,j,k)/(this%rho_l+this%rho_g)
             end do
          end do
       end do

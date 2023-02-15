@@ -1,25 +1,26 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	2 2 1
 
 # Mesh definition
-Lx :	1
+Lx :	6.2832
 nx :	64
 
 # Fluid properties
-Dynamic viscosity :    0.01
+Dynamic viscosity :    0.1
 Density :              1
-Initial rms :          5
-Eddy turnover time :   0.1
 
-# Particle properties
-Particle density :     0.018
-Particle diameter :    1
-Number of particles :  0!100000
+# Steadt-state (forcing) parameters
+Force to maximum Re_lambda : .true.
+Forcing constant     : 50.0
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
+Max iter :          9999999
 
 # Ensight output
-Ensight output period : 0.01
+Ensight output period : 0.1
 
+# Restart
+Restart output period : 200e-3	
+# Restart from : 1.00044E-02

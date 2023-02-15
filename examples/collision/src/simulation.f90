@@ -3,6 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use tpns_class,        only: tpns
+   use hypre_str_class,   only: hypre_str
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -14,6 +15,8 @@ module simulation
    
    !> Single two-phase flow solver and volume fraction solver and corresponding time tracker
    type(tpns),        public :: fs
+   type(hypre_str),   public :: ps
+   type(hypre_str),   public :: vs
    type(vfs),         public :: vf
    type(timetracker), public :: time
    
@@ -142,7 +145,7 @@ contains
       
       ! Create a two-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use ils_class, only: gmres_amg
+        use hypre_str_class, only: pcg_pfmg
          use mathtools, only: Pi
          integer :: i,j,k
          real(WP), dimension(3) :: xyz
@@ -157,13 +160,15 @@ contains
          ! Read in surface tension coefficient
          call param_read('Surface tension coefficient',fs%sigma)
          ! Configure pressure solver
-         call param_read('Pressure iteration',fs%psolv%maxit)
-         call param_read('Pressure tolerance',fs%psolv%rcvg)
-         ! Configure implicit velocity solver
-         call param_read('Implicit iteration',fs%implicit%maxit)
-         call param_read('Implicit tolerance',fs%implicit%rcvg)
-         ! Setup the solver
-         call fs%setup(pressure_ils=gmres_amg,implicit_ils=gmres_amg)
+    ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+    call param_read('Pressure iteration',ps%maxit)
+    call param_read('Pressure tolerance',ps%rcvg)
+    ! Configure implicit velocity solver
+    vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
+    call param_read('Implicit iteration',vs%maxit)
+    call param_read('Implicit tolerance',vs%rcvg)
+    ! Setup the solver
+    call fs%setup(pressure_solver=ps,implicit_solver=vs)
          ! Initial droplet velocity
          call param_read('Droplet 1 velocity',vel1)
          call param_read('Droplet 2 velocity',vel2)

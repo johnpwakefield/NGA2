@@ -1,0 +1,15 @@
+# First mesh definition
+1 Partition :       1 1 4
+1 Number of cells : 128 128 128
+1 Domain size :     6.2832 6.2832 6.2832
+1 Domain center :   3.1416 3.1416 3.1416
+
+# Second mesh definition
+2 Partition :       1 1 4
+2 Number of cells : 64 64 64
+2 Domain size :     6.2832 6.2832 6.2832
+2 Domain center :   3.1416 3.1416 3.1416
+
+# i/o 
+DNS file (i) : ./dns/
+LES file (o) : ./les/

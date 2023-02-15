@@ -5,8 +5,10 @@ module simulation
    use hypre_uns_class,   only: hypre_uns
    use lowmach_class,     only: lowmach
    use vdscalar_class,    only: vdscalar
+   use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -18,25 +20,27 @@ module simulation
    type(hypre_uns),   public :: ss
    type(lowmach),     public :: fs
    type(vdscalar),    public :: sc
+   type(lpt),         public :: lp
    type(timetracker), public :: time
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
+   type(partmesh) :: pmesh
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,consfile
+   type(monitor) :: mfile,cflfile,consfile,lptfile
    
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW,resSC
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
    
-   !> Equation of state
-   real(WP) :: rho_jet,rho_cof
-   real(WP) :: D_jet
-   real(WP) :: U_jet,U_cof
+   !> Fluid properties
+   integer :: nscalar,ind_T,ind_CO2
+   real(WP) :: visc,diff,rho,inlet_velocity
    
 contains
    
@@ -52,60 +56,26 @@ contains
    end function right_boundary
    
 
-   !> Function that localizes jet at -x
-   function jet(pg,i,j,k) result(isIn)
+   !> Function that localizes the left domain boundary
+   function left_domain(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) :: radius
       logical :: isIn
       isIn=.false.
-      ! Jet in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.le.0.5_WP*D_jet.and.i.eq.pg%imin) isIn=.true.
-   end function jet
+      if (i.eq.pg%imin) isIn=.true.
+    end function left_domain
 
 
-   !> Function that localizes coflow at -x
-   function coflow(pg,i,j,k) result(isIn)
+    !> Function that localizes the left domain boundary for scalars
+   function left_domain_sc(pg,i,j,k) result(isIn)
       use pgrid_class, only: pgrid
       class(pgrid), intent(in) :: pg
       integer, intent(in) :: i,j,k
-      real(WP) :: radius
       logical :: isIn
       isIn=.false.
-      ! Coflow in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.gt.0.5_WP*D_jet.and.i.eq.pg%imin) isIn=.true.
-   end function coflow
-   
-   
-   !> Function that localizes jet at -x
-   function jetsc(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: radius
-      logical :: isIn
-      isIn=.false.
-      ! Jet in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.le.0.5_WP*D_jet.and.i.eq.pg%imin-1) isIn=.true.
-   end function jetsc
-
-
-   !> Function that localizes coflow at -x
-   function coflowsc(pg,i,j,k) result(isIn)
-      use pgrid_class, only: pgrid
-      class(pgrid), intent(in) :: pg
-      integer, intent(in) :: i,j,k
-      real(WP) :: radius
-      logical :: isIn
-      isIn=.false.
-      ! Coflow in yz plane
-      radius=norm2([pg%ym(j),pg%zm(k)]-[0.0_WP,0.0_WP])
-      if (radius.gt.0.5_WP*D_jet.and.i.eq.pg%imin-1) isIn=.true.
-   end function coflowsc
+      if (i.eq.pg%imin-1) isIn=.true.
+    end function left_domain_sc
 
    
    !> Define here our equation of state

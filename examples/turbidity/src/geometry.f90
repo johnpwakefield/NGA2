@@ -38,14 +38,14 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='vdjet')
+         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='channel')
          
       end block create_grid
       
@@ -66,7 +66,16 @@ contains
       
       ! Create masks for this config
       create_walls: block
+        integer :: i,j,k
         cfg%VF=1.0_WP
+        do k=cfg%kmino_,cfg%kmaxo_
+           do j=cfg%jmino_,cfg%jmaxo_
+              do i=cfg%imino_,cfg%imaxo_
+                 if (cfg%ym(j).lt.0.0_WP.or.cfg%xm(i).lt.0.0_WP.or.cfg%xm(i).gt.cfg%xL) &
+                      & cfg%VF(i,j,k)=0.0_WP
+              end do
+           end do
+        end do
       end block create_walls
       
       

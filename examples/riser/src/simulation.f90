@@ -432,6 +432,7 @@ contains
       ! Form momentum
       call fs%rho_multiply
       fs%rhoUold=fs%rhoU
+      dRHOdt=0.0_WP
       ! Apply all other boundary conditions
       call fs%interp_vel(Ui,Vi,Wi)
       call fs%get_div(drhodt=dRHOdt)
@@ -481,7 +482,6 @@ contains
       call ens_out%add_particle('particles',pmesh)
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('levelset',G)
-      call ens_out%add_scalar('ibm_vf',fs%cfg%VF)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_scalar('epsp',lp%VF)
       ! Output to ensight
@@ -650,19 +650,14 @@ contains
           ! Apply direct forcing to enforce BC at the pipe walls
           ibm_correction: block
             integer :: i,j,k
-            real(WP) :: VFx,VFy,VFz,RHOx,RHOy,RHOz
+            real(WP) :: VFx,VFy,VFz
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
-                     VFx=get_VF(i,j,k,'U')
-                     VFy=get_VF(i,j,k,'V')
-                     VFz=get_VF(i,j,k,'W')
-                     RHOx=sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))
-                     RHOy=sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))
-                     RHOz=sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))
-                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*RHOx*fs%U(i,j,k)
-                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*RHOy*fs%V(i,j,k)
-                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*RHOz*fs%W(i,j,k)
+                     VFx=get_VF(i,j,k,'U'); VFy=get_VF(i,j,k,'V'); VFz=get_VF(i,j,k,'W')
+                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))*fs%U(i,j,k)
+                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))*fs%V(i,j,k)
+                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))*fs%W(i,j,k)
                   end do
                end do
             end do
@@ -683,26 +678,22 @@ contains
           fs%V=2.0_WP*fs%V-fs%Vold+resV
           fs%W=2.0_WP*fs%W-fs%Wold+resW
 
-!!$          ! Apply direct forcing to enforce BC at the pipe walls
-!!$          ibm_correction: block
+!!$          ! Apply IB forcing to enforce BC at the pipe walls
+!!$          ibforcing: block
 !!$            integer :: i,j,k
-!!$            real(WP) :: VFx,VFy,VFz
 !!$            do k=fs%cfg%kmin_,fs%cfg%kmax_
 !!$               do j=fs%cfg%jmin_,fs%cfg%jmax_
 !!$                  do i=fs%cfg%imin_,fs%cfg%imax_
-!!$                     VFx=get_VF(i,j,k,'U')
-!!$                     VFy=get_VF(i,j,k,'V')
-!!$                     VFz=get_VF(i,j,k,'W')
-!!$                     fs%U(i,j,k)=fs%U(i,j,k)*VFx
-!!$                     fs%V(i,j,k)=fs%V(i,j,k)*VFy
-!!$                     fs%W(i,j,k)=fs%W(i,j,k)*VFz
+!!$                     fs%U(i,j,k)=get_VF(i,j,k,'U')*fs%U(i,j,k)
+!!$                     fs%V(i,j,k)=get_VF(i,j,k,'V')*fs%V(i,j,k)
+!!$                     fs%W(i,j,k)=get_VF(i,j,k,'W')*fs%W(i,j,k)
 !!$                  end do
 !!$               end do
 !!$            end do
 !!$            call fs%cfg%sync(fs%U)
 !!$            call fs%cfg%sync(fs%V)
 !!$            call fs%cfg%sync(fs%W)
-!!$          end block ibm_correction
+!!$          end block ibforcing
 
           ! Apply other boundary conditions and update momentum
           call fs%apply_bcond(time%tmid,time%dtmid)

@@ -1,5 +1,9 @@
 # Parallelization
+<<<<<<< HEAD
 Partition :	1 4 1
+=======
+Partition :	4 1 1
+>>>>>>> 0880680ec7b2954ab0dc78cfd2b7af281a5e034b
 
 # Mesh definition
 Pipe length   : 0.08	
@@ -20,7 +24,7 @@ Density           : 1.2
 Gravity           : -9.81 0 0
 
 # Particle properties
-Particle volume fraction    : 0.012
+Particle volume fraction    : 0.02
 Particle mean diameter      : 58e-6
 Particle standard deviation : 25-6
 Particle min diameter       : 21e-6

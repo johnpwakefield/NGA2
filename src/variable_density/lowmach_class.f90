@@ -20,6 +20,7 @@ module lowmach_class
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
+   integer, parameter, public :: slip=6              !< Free-slip condition
    
    !> Boundary conditions for the low-Mach solver
    type :: bcond
@@ -831,20 +832,14 @@ contains
    
    !> Add a boundary condition
    subroutine add_bcond(this,name,type,locator,face,dir,canCorrect)
-      use string,   only: lowercase
-      use messager, only: die
+      use string,         only: lowercase
+      use messager,       only: die
+      use iterator_class, only: locator_ftype
       implicit none
       class(lowmach), intent(inout) :: this
       character(len=*), intent(in) :: name
       integer, intent(in) :: type
-      external :: locator
-      interface
-         logical function locator(pargrid,ind1,ind2,ind3)
-            use pgrid_class, only: pgrid
-            class(pgrid), intent(in) :: pargrid
-            integer, intent(in) :: ind1,ind2,ind3
-         end function locator
-      end interface
+      procedure(locator_ftype) :: locator
       character(len=1), intent(in) :: face
       integer, intent(in) :: dir
       logical, intent(in) :: canCorrect
@@ -880,7 +875,7 @@ contains
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
+      case (dirichlet) !< Dirichlet is set one face (i.e., velocity component) at the time
          select case (new_bc%face)
          case ('x')
             do n=1,new_bc%itr%n_
@@ -902,6 +897,7 @@ contains
       case (neumann) !< Neumann has to be at existing wall or at domain boundary!
       case (clipped_neumann)
       case (convective)
+      case (slip)
       case default
          call die('[lowmach apply_bcond] Unknown bcond type')
       end select
@@ -964,7 +960,7 @@ contains
                ! This is done by the user directly
                ! Unclear whether we want to do this within the solver...
                
-            case (neumann,clipped_neumann) !< Apply Neumann condition to all three components
+            case (neumann,clipped_neumann,slip) !< Apply Neumann condition to all three components
                ! Handle index shift due to staggering
                stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
@@ -1032,7 +1028,30 @@ contains
                      end do
                   end select
                end if
-            
+               ! If needed, no penetration
+               if (my_bc%type.eq.slip) then
+                  select case (my_bc%face)
+                  case ('x')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        this%U(i,j,k)=0.0_WP
+                        this%rhoU(i,j,k)=0.0_WP
+                     end do
+                  case ('y')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        this%V(i,j,k)=0.0_WP
+                        this%rhoV(i,j,k)=0.0_WP
+                     end do
+                  case ('z')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        this%W(i,j,k)=0.0_WP
+                        this%rhoW(i,j,k)=0.0_WP
+                     end do
+                  end select
+               end if
+
             case (convective)   ! Not implemented yet!
                
             case default

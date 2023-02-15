@@ -6,8 +6,7 @@ PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
-USE_FFTW  = FALSE
-USE_IRL   = TRUE
+USE_IRL   = FALSE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
@@ -24,12 +23,14 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
+LAPACK_DIR= /opt/homebrew/Cellar/lapack/3.10.1_1
+HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre/
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := subgrid two_phase core data solver config grid libraries
+Bdirs   := subgrid variable_density particles core data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

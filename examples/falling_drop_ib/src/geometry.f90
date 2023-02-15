@@ -1,12 +1,12 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use config_class, only: config
-   use precision,    only: WP
+   use ibconfig_class, only: ibconfig
+   use precision,      only: WP
    implicit none
    private
    
    !> Single config
-   type(config), public :: cfg
+   type(ibconfig), public :: cfg
    
    public :: geometry_init
    
@@ -35,17 +35,17 @@ contains
          
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=2,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='vdjet')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.true.,yper=.false.,zper=.true.,name='FallingDrop')
          
       end block create_grid
       
@@ -54,19 +54,30 @@ contains
       create_cfg: block
          use parallel, only: group
          integer, dimension(3) :: partition
-         
          ! Read in partition
          call param_read('Partition',partition,short='p')
-         
          ! Create partitioned grid
-         cfg=config(grp=group,decomp=partition,grid=grid)
-         
+         cfg=ibconfig(grp=group,decomp=partition,grid=grid)
       end block create_cfg
       
       
-      ! Create masks for this config
+      ! Create IB walls for this config
       create_walls: block
-        cfg%VF=1.0_WP
+         use mathtools,      only: twoPi
+         use ibconfig_class, only: bigot,sharp
+         integer :: i,j,k
+         ! Create IB field
+         do k=cfg%kmino_,cfg%kmaxo_
+            do j=cfg%jmino_,cfg%jmaxo_
+               do i=cfg%imino_,cfg%imaxo_
+                  cfg%Gib(i,j,k)=0.02_WP+0.01_WP*cos(3.0_WP*twoPi*cfg%zm(k)/cfg%zL)*cos(3.0_WP*twoPi*cfg%xm(i)/cfg%xL)-cfg%ym(j)
+               end do
+            end do
+         end do
+         ! Get normal vector
+         call cfg%calculate_normal()
+         ! Get VF field
+         call cfg%calculate_vf(method=sharp)
       end block create_walls
       
       

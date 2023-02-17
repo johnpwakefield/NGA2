@@ -40,8 +40,8 @@ endif
 
 
 # When I run on my local desktop, I like to add this gfortran flag.
-FFLAGS   += -fcheck=array-temps
-F90FLAGS += -fcheck=array-temps # --std=f2008
+FFLAGS   += -fcheck=array-temps -fallow-argument-mismatch
+F90FLAGS += -fcheck=array-temps -fallow-argument-mismatch # --std=f2008
 
 
 # Instead of linking to static gfortran library, I like to use shared libraries.

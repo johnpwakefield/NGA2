@@ -90,6 +90,30 @@ contains
 
   end subroutine houssem2d_rhs
 
+  !pure subroutine houssem2d_rhs_backward(gvec, taup, fl_vel, U, dt, rhs)
+  !  implicit none
+  !  real(WP), intent(in) :: taup, dt
+  !  real(WP), dimension(2), intent(in) :: gvec, fl_vel
+  !  real(WP), dimension(6), intent(in) :: U
+  !  real(WP), dimension(6), intent(out) :: rhs
+  !  real(WP), dimension(2) :: pt_vel
+  !  real(WP) :: a, b
+
+  !  a = 1.0_WP / taup + 1.0_WP / dt
+  !  b = 1.0_WP / (1.0_WP + taup / dt)
+
+  !  pt_vel(:) = U(2:3) / U(1)
+
+  !  rhs(1) = 0.0_WP
+
+  !  rhs(2:3) = U(1) * (a * fl_vel - b * pt_vel)
+  !  rhs(2:3) = rhs(2:3) + U(1) * gvec
+
+  !  rhs(4) = 
+
+
+  !end subroutine houssem2d_rhs
+
   pure subroutine houssem2d_evals_x(N, params, U, evals)
     implicit none
     integer, intent(in) :: N
@@ -133,26 +157,26 @@ contains
     real(WP), dimension(6), intent(in) :: Ul, Ur
     real(WP), dimension(6), intent(out) :: Ua
     real(WP) :: wl, wr, v1, v2, v1l, v1r, v2l, v2r
+    real(WP) :: e11l, e11r, e12l, e12r, e22l, e22r
 
     v1l = Ul(2) / Ul(1); v1r = Ur(2) / Ur(1);
     v2l = Ul(3) / Ul(1); v2r = Ur(3) / Ur(1);
+    e11l = Ul(4) / Ul(1); e11r = Ur(4) / Ur(1);
+    e12l = Ul(5) / Ul(1); e12r = Ur(5) / Ur(1);
+    e22l = Ul(6) / Ul(1); e22r = Ur(6) / Ur(1);
 
     wl = sqrt(Ul(1)); wr = sqrt(Ur(1)); Ua(1) = wl * wr;
-    wl = wl / (wl + wr); wr = wr / (wl + wr);
+    wl = wl / (wl + wr); wr = 1.0_WP - wl;
 
     v1 = wl * v1l + wr * v1r; v2 = wl * v2l + wr * v2r;
 
     Ua(2) = v1 * Ua(1); Ua(3) = v2 * Ua(1);
 
-    Ua(4) =  (3*Ul(4)*Ua(1) + 3*Ul(4)*Ul(1) + 3*Ur(4)*Ua(1) + 3*Ur(4)*Ur(1) - &
-      & 2*Ua(1)*v1l**2 + 4*Ua(1)*v1l*v1r - 2*Ua(1)*v1r**2) / (3*(2*Ua(1) +    &
-      & Ul(1) + Ur(1)))
-    Ua(5) = (3*Ul(5)*Ua(1) + 3*Ul(5)*Ul(1) + 3*Ur(5)*Ua(1) + 3*Ur(5)*Ur(1) -  &
-      & 2*Ua(1)*v1l*v2l + 2*Ua(1)*v1l*v2r + 2*Ua(1)*v1r*v2l - 2*Ua(1)*v1r*v2r)&
-      & / (3*(2*Ua(1) + Ul(1) + Ur(1)))
-    Ua(6) = (3*Ul(6)*Ua(1) + 3*Ul(6)*Ul(1) + 3*Ur(6)*Ua(1) + 3*Ur(6)*Ur(1) -  &
-      & 2*Ua(1)*v2l**2 + 4*Ua(1)*v2l*v2r - 2*Ua(1)*v2r**2)/(3*(2*Ua(1) + Ul(1)&
-      & + Ur(1)))
+    Ua(4) = (3*e11l*Ua(1) + 3*e11l*Ul(1) + 3*e11r*Ua(1) + 3*e11r*Ur(1) - 2*Ua(1)*v1l**2 + 4*Ua(1)*v1l*v1r - 2*Ua(1)*v1r**2) / (3*(2*Ua(1) + Ul(1) + Ur(1)))
+    Ua(5) = (3*e12l*Ua(1) + 3*e12l*Ul(1) + 3*e12r*Ua(1) + 3*e12r*Ur(1) - 2*Ua(1)*v1l*v2l + 2*Ua(1)*v1l*v2r + 2*Ua(1)*v1r*v2l - 2*Ua(1)*v1r*v2r) / (3*(2*Ua(1) + Ul(1) + Ur(1)))
+    Ua(6) = (3*e22l*Ua(1) + 3*e22l*Ul(1) + 3*e22r*Ua(1) + 3*e22r*Ur(1) - 2*Ua(1)*v2l**2 + 4*Ua(1)*v2l*v2r - 2*Ua(1)*v2r**2) / (3*(2*Ua(1) + Ul(1) + Ur(1)))
+
+    Ua(4:6) = Ua(1) * Ua(4:6)
 
   end subroutine houssem2d_roeavg
 
@@ -163,7 +187,7 @@ contains
     real(WP), dimension(6), intent(out) :: lambda
     real(WP) :: c, v1
 
-    v1 = U(2) / U(1); c = sqrt(U(4) - v1**2);
+    v1 = U(2) / U(1); c = sqrt(U(4) / U(1) - v1**2);
 
     lambda = (/ v1 - RT3 * c, v1 - c, v1, v1, v1 + c, v1 + RT3 * c /)
 
@@ -187,12 +211,13 @@ contains
     real(WP), dimension(N) :: Uln, Urn
     real(WP), dimension(6) :: rs_row
 
-    Uln(:) = Ul(:); Uln(2) = Ul(3); Uln(3) = Ul(2);
-    Urn(:) = Ur(:); Urn(2) = Ur(3); Urn(3) = Ur(2);
+    Uln(:) = Ul(:); Uln(2) = Ul(3); Uln(3) = Ul(2); Uln(4) = Ul(6); Uln(6) = Ul(4);
+    Urn(:) = Ur(:); Urn(2) = Ur(3); Urn(3) = Ur(2); Urn(4) = Ur(6); Urn(6) = Ur(4);
 
     call houssem2d_rsolv_roe_1d(pl, pr, Uln, Urn, rs)
 
     rs_row(:) = rs(2,5:10); rs(2,5:10) = rs(3,5:10); rs(3,5:10) = rs_row(:);
+    rs_row(:) = rs(4,5:10); rs(4,5:10) = rs(6,5:10); rs(6,5:10) = rs_row(:);
 
   end subroutine houssem2d_rsolv_y
 
@@ -223,7 +248,9 @@ contains
     v1 = Ua(2) / Ua(1); v2 = Ua(3) / Ua(1);
 
     ! c and k
-    c = sqrt(Ua(4) - v1**2); k = sqrt(Ua(5) - v1 * v2);
+    !TODO decide whether to keep epsilon
+    c = sqrt(Ua(4) / Ua(1) - v1**2 + 1e-13_WP)
+    k = sqrt(Ua(5) / Ua(1) - v1 * v2 + 1e-13_WP)
     koc = k / c; cok = c / k;
 
     ! eigenvalues

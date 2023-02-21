@@ -9,7 +9,7 @@ ny :	64
 
 # Vortex dims
 Num vortices x : 1
-Num vortices y : 2
+Num vortices y : 1
 
 # Constants
 Gravity : 0.0
@@ -17,11 +17,10 @@ Particle relax time : 2.0
 
 # Initialization
 Initial rhopn : 1.0
-Initial x velocity : 0.0
-Initial y velocity : 0.0
-Initial e11 : 0.20
-Initial e12 : 0.02
-Initial e22 : 0.20
+Initial velocity scale : 1.0
+Initial e11 : 3.6
+Initial e12 : 1.6
+Initial e22 : 3.6
 
 # Time integration
 Max cfl number :    0.98

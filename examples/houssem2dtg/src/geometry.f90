@@ -4,21 +4,21 @@ module geometry
    use precision,    only: WP
    implicit none
    private
-   
+
    !> Single config
    type(config), public :: cfg
-   
+
    public :: geometry_init
-   
+
 contains
-   
+
    !> Initialization of problem geometry
    subroutine geometry_init
       use sgrid_class, only: sgrid
       use param,       only: param_read
       implicit none
       type(sgrid) :: grid
-      
+
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
@@ -37,10 +37,10 @@ contains
 
          ! create simple rectilinear grid
          do i = 1, nx+1
-            x(i) = real(i-1,WP) / real(nx, WP) * pi
+            x(i) = real(i-1,WP) / real(nx, WP)
          end do
          do j = 1, ny+1
-            y(j) = real(j-1,WP) / real(ny, WP) * pi
+            y(j) = real(j-1,WP) / real(ny, WP)
          end do
          do k = 1, 1+1
             z(k) = real(k-1,WP) / real(1, WP)
@@ -53,7 +53,7 @@ contains
          deallocate(x, y, z)
 
       end block create_grid
-      
+
       ! create a config from that grid on our entire group
       create_cfg: block
          use parallel, only: group
@@ -66,13 +66,13 @@ contains
          cfg = config(grp=group, decomp=partition, grid=grid)
 
       end block create_cfg
-      
+
       ! Create masks for this config
       create_walls: block
          cfg%VF = 1.0_WP
       end block create_walls
-      
+
    end subroutine geometry_init
-   
+
 end module geometry
 

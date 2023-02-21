@@ -13,6 +13,8 @@ module simulation
   implicit none
   private
 
+  real(WP), parameter :: pi = 4.0_WP * atan(1.0_WP)
+
   !> Flow solver and a time tracker
   type(muscl), public :: fs
   type(timetracker), public :: time
@@ -24,6 +26,7 @@ module simulation
   !> physical value arrays for ensight output
   !> up, vp
   real(WP), dimension(:,:,:,:), pointer :: p_vel
+  real(WP), dimension(:,:,:), pointer :: scl_zeros
 
   !> tg parameters
   real(WP) :: tg_nu
@@ -49,11 +52,11 @@ contains
     integer :: i, j
     real(WP) :: sy, cy
 
-    do j = cfg%jmin_, cfg%jmax_
-      sy = cos(tg_b * cfg%ym(j)); cy = sin(tg_b * cfg%ym(j));
-      do i = cfg%imin_, cfg%imax_
-        fs%params(1,i,j,:) = sin(tg_a * cfg%xm(i)) * sy / (+tg_a)
-        fs%params(2,i,j,:) = cos(tg_a * cfg%xm(i)) * cy / (-tg_b)
+    do j = cfg%jmino_, cfg%jmaxo_
+      sy = sin(2 * pi * tg_b * cfg%ym(j)); cy = cos(2 * pi * tg_b * cfg%ym(j));
+      do i = cfg%imino_, cfg%imaxo_
+        fs%params(1,i,j,:) = sin(2 * pi * tg_a * cfg%xm(i)) * cy / (+tg_a)
+        fs%params(2,i,j,:) = cos(2 * pi * tg_a * cfg%xm(i)) * sy / (-tg_b)
       end do
     end do
 
@@ -65,7 +68,7 @@ contains
 
   subroutine rk2src()
     implicit none
-    integer i, j, k
+    integer :: i, j, k
 
     do k = cfg%kmin_, cfg%kmax_
       do j = cfg%jmin_, cfg%jmax_
@@ -90,7 +93,24 @@ contains
 
     fs%dU = time%dt * src_rhs
 
-  end subroutine
+  end subroutine rk2src
+
+  subroutine eulersrc()
+    implicit none
+    integer :: i, j, k
+
+    do k = cfg%kmin_, cfg%kmax_
+      do j = cfg%jmin_, cfg%jmax_
+        do i = cfg%imin_, cfg%imax_
+          call  houssem2d_rhs(gvec, taup, fs%params(:,i,j,k), fs%Uc(:,i,j,k), &
+            & src_rhs(:,i,j,k))
+        end do
+      end do
+    end do
+
+    fs%dU = time%dt * src_rhs
+
+  end subroutine eulersrc
 
   !> update phys
   subroutine update_p_vel()
@@ -145,23 +165,22 @@ contains
 
     ! prepare initial fields
     initialize_fields: block
-      real(WP) :: rhopn_init, v1_init, v2_init, e11_init, e12_init, e22_init
+      real(WP) :: rhopn_init, v_init_scale, e11_init, e12_init, e22_init
 
       call update_tg(time%t)
 
       call param_read('Initial rhopn', rhopn_init)
-      call param_read('Initial x velocity', v1_init)
-      call param_read('Initial y velocity', v2_init)
+      call param_read('Initial velocity scale', v_init_scale)
       call param_read('Initial e11', e11_init)
       call param_read('Initial e12', e12_init)
       call param_read('Initial e22', e22_init)
 
       fs%Uc(1,:,:,:) = rhopn_init
-      fs%Uc(2,:,:,:) = rhopn_init * v1_init
-      fs%Uc(3,:,:,:) = rhopn_init * v2_init
-      fs%Uc(4,:,:,:) = e11_init
-      fs%Uc(5,:,:,:) = e12_init
-      fs%Uc(6,:,:,:) = e22_init
+      fs%Uc(2,:,:,:) = rhopn_init * v_init_scale * fs%params(1,:,:,:)
+      fs%Uc(3,:,:,:) = rhopn_init * v_init_scale * fs%params(2,:,:,:)
+      fs%Uc(4,:,:,:) = rhopn_init * e11_init
+      fs%Uc(5,:,:,:) = rhopn_init * e12_init
+      fs%Uc(6,:,:,:) = rhopn_init * e22_init
 
       call fs%recalc_cfl()
 
@@ -169,13 +188,14 @@ contains
 
     ! Add Ensight output
     create_ensight: block
-      use ensight_class, only: add_rscalar
       use string, only: str_short
-      real(WP), dimension(:,:,:), pointer :: scl_ptr
+      real(WP), dimension(:,:,:), pointer :: scl_ptr_1, scl_ptr_2, scl_ptr_3
 
       ! create array to hold particle velocities
-      allocate(p_vel(2,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,        &
+      allocate(p_vel(2,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,           &
         & cfg%kmino_:cfg%kmaxo_))
+      allocate(scl_zeros(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,         &
+        cfg%kmino_:cfg%kmaxo_))
 
       ! Create Ensight output from cfg
       ens_out = ensight(cfg=cfg, name='houssem2dtg')
@@ -185,22 +205,20 @@ contains
       call param_read('Ensight output period', ens_evt%tper)
 
       ! Add variables to output
-      scl_ptr => fs%Uc(1,:,:,:)
-      call add_rscalar(ens_out, 'pt_density', scl_ptr)
-      scl_ptr => p_vel(1,:,:,:)
-      call add_rscalar(ens_out, 'pt_x_velocity', scl_ptr)
-      scl_ptr => p_vel(2,:,:,:)
-      call add_rscalar(ens_out, 'pt_y_velocity', scl_ptr)
-      scl_ptr => fs%params(1,:,:,:)
-      call add_rscalar(ens_out, 'fluid_x_velocity', scl_ptr)
-      scl_ptr => fs%params(2,:,:,:)
-      call add_rscalar(ens_out, 'fluid_y_velocity', scl_ptr)
-      scl_ptr => fs%Uc(4,:,:,:)
-      call add_rscalar(ens_out, 'e11', scl_ptr)
-      scl_ptr => fs%Uc(5,:,:,:)
-      call add_rscalar(ens_out, 'e12', scl_ptr)
-      scl_ptr => fs%Uc(6,:,:,:)
-      call add_rscalar(ens_out, 'e22', scl_ptr)
+      scl_ptr_1 => fs%Uc(1,:,:,:)
+      call ens_out%add_scalar('pt_density', scl_ptr_1)
+      scl_ptr_1 => p_vel(1,:,:,:)
+      scl_ptr_2 => p_vel(2,:,:,:)
+      call ens_out%add_vector('pt_vel', scl_ptr_1, scl_ptr_2, scl_zeros)
+      scl_ptr_1 => fs%params(1,:,:,:)
+      scl_ptr_2 => fs%params(2,:,:,:)
+      call ens_out%add_vector('fl_vel', scl_ptr_1, scl_ptr_2, scl_zeros)
+      scl_ptr_1 => fs%Uc(4,:,:,:)
+      call ens_out%add_scalar('e11', scl_ptr_1)
+      scl_ptr_1 => fs%Uc(5,:,:,:)
+      call ens_out%add_scalar('e12', scl_ptr_1)
+      scl_ptr_1 => fs%Uc(6,:,:,:)
+      call ens_out%add_scalar('e22', scl_ptr_1)
 
       ! Output to ensight
       if (ens_evt%occurs()) then
@@ -297,16 +315,13 @@ contains
       ! take step (Strang)
       call update_tg(time%t)
       fs%dU(:,:,:,:) = 0.0_WP
+      call eulersrc()
+      fs%Uc = fs%Uc + fs%dU
+      fs%dU(:,:,:,:) = 0.0_WP
       call fs%compute_dU_x(0.5_WP * time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:,:,:,:) = 0.0_WP
-      call fs%compute_dU_y(0.5_WP * time%dt)
-      fs%Uc = fs%Uc + fs%dU
-      fs%dU(:,:,:,:) = 0.0_WP
-      call rk2src()
-      fs%Uc = fs%Uc + fs%dU
-      fs%dU(:,:,:,:) = 0.0_WP
-      call fs%compute_dU_y(0.5_WP * time%dt)
+      call fs%compute_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:,:,:,:) = 0.0_WP
       call fs%compute_dU_x(0.5_WP * time%dt)

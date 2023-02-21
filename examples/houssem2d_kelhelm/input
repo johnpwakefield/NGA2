@@ -1,0 +1,28 @@
+# Parallelization
+Partition :	2 2 1
+
+# Mesh definition
+Lx :	1.0
+nx :	64
+Ly :	1.0
+ny :	64
+
+# Shear parameters
+Shear velocity top : -1.0
+Shear velocity bot : +1.0
+
+# Constants
+Gravity : 0.0
+Particle relax time : 2.0
+
+# Initialization
+Initial rhopn : 1.0
+Initial velocity scale : 1.0
+
+# Time integration
+Max cfl number :    0.98
+Max timestep :      1e-4
+
+# Ensight output
+Ensight output period : 0.01
+

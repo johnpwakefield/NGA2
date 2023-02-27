@@ -25,7 +25,7 @@ Bed width : 0.01
 Particle volume fraction : 0.01
 Particle density :  1200
 Particle diameter : 50e-6
-LPT timestep size : 1e-5
+Particle timestep size : 1e-5
 Collision timescale : 15e-5
 Coefficient of restitution : 0.8
 Friction coefficient : 0.1

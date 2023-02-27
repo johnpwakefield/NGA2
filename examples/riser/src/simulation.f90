@@ -45,9 +45,13 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
+  real(WP), dimension(:,:,:), allocatable :: tmp1,tmp2,tmp3
   real(WP), dimension(:,:,:), allocatable :: G
   real(WP), dimension(:,:,:,:), allocatable :: Gnorm
   real(WP) :: visc,rho,mfr,mfr_target,bforce
+
+  !> Max timestep size for LPT
+  real(WP) :: lp_dt,lp_dt_max
 
   !> Wallclock time for monitoring
   type :: timer
@@ -66,9 +70,9 @@ contains
       use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
       use parallel,  only: MPI_REAL_WP
       implicit none
-      integer :: iunit,ierr,i,j,k
-      real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_
-      character(len=str_medium) :: filename,timestamp
+!!$      integer :: iunit,ierr,i,j,k
+!!$      real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_
+!!$      character(len=str_medium) :: filename,timestamp
 !!$      ! Allocate radial line storage
 !!$      allocate(Uavg (fs%cfg%jmin:fs%cfg%jmax)); Uavg =0.0_WP
 !!$      allocate(Uavg_(fs%cfg%jmin:fs%cfg%jmax)); Uavg_=0.0_WP
@@ -175,6 +179,8 @@ contains
          ! Read the datafile
          df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
       else
+         ! Prepare a new directory for storing files for restart
+         call execute_command_line('mkdir -p restart')
          ! If we are not restarting, we will still need a datafile for saving restart files
          df=datafile(pg=cfg,filename=trim(cfg%name),nval=4,nvar=4)
          df%valname(1)='t'
@@ -246,6 +252,9 @@ contains
       allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(rho0    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(G       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(tmp1    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(tmp2    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(tmp3    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Gnorm   (1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
 
@@ -256,7 +265,7 @@ contains
       use mathtools, only: Pi,twoPi
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE,MPI_INTEGER
       use parallel, only: MPI_REAL_WP
-      real(WP) :: VFavg,Volp,Vol_,sumVolp,Tp,meand,dist,r,buf
+      real(WP) :: VFavg,Vol_,sumVolp,Tp,meand,r,buf
       real(WP) :: dmean,dsd,dmin,dmax,dshift
       real(WP), dimension(:), allocatable :: dp
       integer :: i,j,k,ii,jj,kk,nn,ip,jp,kp,np,offset,ierr
@@ -283,6 +292,9 @@ contains
          dmin=dmean
          dmax=dmean
       end if
+      ! Maximum timestep size used for particles
+      call param_read('Particle timestep size',lp_dt_max,default=huge(1.0_WP))
+      lp_dt=lp_dt_max
       ! Get particle temperature from input
       call param_read('Particle temperature',Tp,default=298.15_WP)
       ! Set collision timescale
@@ -311,7 +323,7 @@ contains
             end do
          end do
          ! Get particle diameters
-         np=5*VFavg*Vol_/(pi*dmean**3/6.0_WP)
+         np=5*ceiling(VFavg*Vol_/(pi*dmean**3/6.0_WP))
          allocate(dp(np))
          sumVolp=0.0_WP; np=0
          do while(sumVolp.lt.VFavg*Vol_)
@@ -416,19 +428,26 @@ contains
     ! Initialize our velocity field
     initialize_velocity: block
       real(WP) :: Ubulk
+      ! Store fluid density without volume fractioin
+      fs%rho=rho; rho0=rho
+      ! Get velocity and mass flowrate
       if (restarted) then
          call df%pullvar(name='U',var=fs%U)
          call df%pullvar(name='V',var=fs%V)
          call df%pullvar(name='W',var=fs%W)
          call df%pullvar(name='P',var=fs%P)
+         call df%pullval(name='mfr',val=mfr)
+         call df%pullval(name='bforce',val=bforce)
       else
-         ! Initial velocity
          call param_read('Bulk velocity',Ubulk)
          fs%U=Ubulk; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
+         call fs%rho_multiply
+         ! Get target MFR using bulk velocity in absence of particles
+         mfr=get_bodyforce_mfr()
+         bforce=0.0_WP
       end if
-      ! Set density from particle volume fraction and store initial density
+      ! Set density from particle volume fraction
       fs%rho=rho*(1.0_WP-lp%VF)
-      rho0=rho
       ! Form momentum
       call fs%rho_multiply
       fs%rhoUold=fs%rhoU
@@ -438,14 +457,7 @@ contains
       call fs%get_div(drhodt=dRHOdt)
       ! Compute MFR through all boundary conditions
       call fs%get_mfr()
-      ! Set initial MFR and body force
-      if (restarted) then
-         call df%pullval(name='mfr',val=mfr)
-         call df%pullval(name='bforce',val=bforce)
-      else
-         mfr=get_bodyforce_mfr()
-         bforce=0.0_WP
-      end if
+      ! Store target MFR
       mfr_target=mfr
     end block initialize_velocity
 
@@ -484,6 +496,7 @@ contains
       call ens_out%add_scalar('levelset',G)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_scalar('epsp',lp%VF)
+      call ens_out%add_scalar('ptke',lp%ptke)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
@@ -492,7 +505,7 @@ contains
     create_monitor: block
       real(WP) :: cfl
       ! Prepare some info about fields
-      call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
+      call lp%get_cfl(time%dt,cflc=time%cfl)
       call fs%get_cfl(time%dt,cfl); time%cfl=max(time%cfl,cfl)
       call fs%get_max()
       call lp%get_max()
@@ -528,6 +541,7 @@ contains
       lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
       call lptfile%add_column(time%n,'Timestep number')
       call lptfile%add_column(time%t,'Time')
+      call lptfile%add_column(lp_dt,'Particle dt')
       call lptfile%add_column(lp%VFmean,'VFp mean')
       call lptfile%add_column(lp%VFmax,'VFp max')
       call lptfile%add_column(lp%np,'Particle number')
@@ -583,7 +597,7 @@ contains
        wt_total%time_in=parallel_time()
 
        ! Increment time
-       call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
+       call lp%get_cfl(time%dt,cflc=time%cfl)
        call fs%get_cfl(time%dt,cfl); time%cfl=max(time%cfl,cfl)
        call time%adjust_dt()
        call time%increment()
@@ -594,19 +608,41 @@ contains
        fs%Vold=fs%V; fs%rhoVold=fs%rhoV
        fs%Wold=fs%W; fs%rhoWold=fs%rhoW
 
-       ! Get fluid stress (include mean body force from mfr forcing)
+       ! Particle update
        wt_lpt%time_in=parallel_time()
-       call fs%get_div_stress(resU,resV,resW)
-       resU=resU+bforce
-
-       ! Collide and advance particles
-       call lp%collide(dt=time%dtmid,Gib=G,Nxib=Gnorm(1,:,:,:),Nyib=Gnorm(2,:,:,:),Nzib=Gnorm(3,:,:,:))
-       call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
-            srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
-
-       ! Update density based on particle volume fraction
-       fs%rho=rho*(1.0_WP-lp%VF)
-       dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
+       lpt: block
+         real(WP) :: dt_done,mydt
+         ! Get fluid stress
+         call fs%get_div_stress(resU,resV,resW)
+         resU=resU+bforce
+         ! Zero-out LPT source terms
+         srcUlp=0.0_WP; srcVlp=0.0_WP; srcWlp=0.0_WP
+         ! Sub-iteratore
+         call lp%get_cfl(lp_dt,cflc=cfl,cfl=cfl)
+         if (cfl.gt.0.0_WP) lp_dt=min(lp_dt*time%cflmax/cfl,lp_dt_max)
+         dt_done=0.0_WP
+         do while (dt_done.lt.time%dtmid)
+            ! Decide the timestep size
+            mydt=min(lp_dt,time%dtmid-dt_done)
+            ! Collide and advance particles
+            call lp%collide(dt=mydt,Gib=G,Nxib=Gnorm(1,:,:,:),Nyib=Gnorm(2,:,:,:),Nzib=Gnorm(3,:,:,:))
+            call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
+                 srcU=tmp1,srcV=tmp2,srcW=tmp3)
+            srcUlp=srcUlp+tmp1
+            srcVlp=srcVlp+tmp2
+            srcWlp=srcWlp+tmp3
+            ! Increment
+            dt_done=dt_done+mydt
+         end do
+         ! Update density based on particle volume fraction
+         fs%rho=rho*(1.0_WP-lp%VF)
+         dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
+         ! Compute PTKE and store source terms
+         call lp%get_ptke(dt=time%dtmid,Ui=Ui,Vi=Vi,Wi=Wi,visc=fs%visc,rho=fs%rho,srcU=tmp1,srcV=tmp2,srcW=tmp3)
+         srcUlp=srcUlp+tmp1
+         srcVlp=srcVlp+tmp2
+         srcWlp=srcWlp+tmp3
+       end block lpt
        wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
        ! Perform sub-iterations
@@ -777,8 +813,6 @@ contains
             character(len=str_medium) :: timestamp
             ! Prefix for files
             write(timestamp,'(es12.5)') time%t
-            ! Prepare a new directory
-            if (fs%cfg%amRoot) call execute_command_line('mkdir -p restart')
             ! Populate df and write it
             call df%pushval(name='t' ,val=time%t     )
             call df%pushval(name='dt',val=time%dt    )
@@ -809,7 +843,7 @@ contains
     ! timetracker
 
     ! Deallocate work arrays
-    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt,G,Gnorm)
+    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt,G,Gnorm,tmp1,tmp2,tmp3)
 
   end subroutine simulation_final
 

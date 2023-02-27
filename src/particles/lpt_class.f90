@@ -116,8 +116,12 @@ module lpt_class
      ! Filtering operation
      logical :: implicit_filter                          !< Solve implicitly
      real(WP) :: filter_width                            !< Characteristic filter width
-     real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z    !< Divergence operator
-     real(WP), dimension(:,:,:,:), allocatable :: grd_x,grd_y,grd_z    !< Gradient operator
+     real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z !< Divergence operator
+     real(WP), dimension(:,:,:,:), allocatable :: grd_x,grd_y,grd_z !< Gradient operator
+
+     ! Pseudo turbulence
+     real(WP), dimension(:,:,:), allocatable :: ptke     !< Pseudo-turbulent kinetic energy, cell-centered
+     real(WP), dimension(:,:,:,:), allocatable :: itpr_x,itpr_y,itpr_z !< Interpolation from cell face to cell center
 
    contains
      procedure :: update_partmesh                        !< Update a partmesh object using current particles
@@ -134,6 +138,7 @@ module lpt_class
      procedure :: get_max                                !< Extract various monitoring data
      procedure :: get_cfl                                !< Calculate maximum CFL
      procedure :: update_VF                              !< Compute particle volume fraction
+     procedure :: get_ptke                               !< Compute pseudo-turbulent kinetic energy (and Reynolds stress)
      procedure :: filter                                 !< Apply volume filtering to field
      procedure :: inject                                 !< Inject particles at a prescribed boundary
   end type lpt
@@ -173,8 +178,9 @@ contains
     ! Initialize MPI derived datatype for a particle
     call prepare_mpi_part()
 
-    ! Allocate VF and src arrays on cfg mesh
-    allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
+    ! Allocate VF and PTKE on cfg mesh
+    allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF=0.0_WP
+    allocate(self%ptke(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%ptke=0.0_WP
 
     ! Set filter width to zero by default
     self%filter_width=0.0_WP
@@ -218,6 +224,21 @@ contains
        end do
     end do
 
+    ! Allocate finite difference density interpolation coefficients
+    allocate(self%itpr_x(-1:0,self%cfg%imin_:self%cfg%imax_+1,self%cfg%jmin_:self%cfg%jmax_+1,self%cfg%kmin_:self%cfg%kmax_+1)) !< X-face-centered
+    allocate(self%itpr_y(-1:0,self%cfg%imin_:self%cfg%imax_+1,self%cfg%jmin_:self%cfg%jmax_+1,self%cfg%kmin_:self%cfg%kmax_+1)) !< Y-face-centered
+    allocate(self%itpr_z(-1:0,self%cfg%imin_:self%cfg%imax_+1,self%cfg%jmin_:self%cfg%jmax_+1,self%cfg%kmin_:self%cfg%kmax_+1)) !< Z-face-centered
+    ! Create density interpolation coefficients to cell face
+    do k=self%cfg%kmin_,self%cfg%kmax_+1
+       do j=self%cfg%jmin_,self%cfg%jmax_+1
+          do i=self%cfg%imin_,self%cfg%imax_+1
+             self%itpr_x(:,i,j,k)=self%cfg%dxmi(i)*[self%cfg%xm(i)-self%cfg%x(i),self%cfg%x(i)-self%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
+             self%itpr_y(:,i,j,k)=self%cfg%dymi(j)*[self%cfg%ym(j)-self%cfg%y(j),self%cfg%y(j)-self%cfg%ym(j-1)] !< Linear interpolation in y from [xm,ym,zm] to [xm,y,zm]
+             self%itpr_z(:,i,j,k)=self%cfg%dzmi(k)*[self%cfg%zm(k)-self%cfg%z(k),self%cfg%z(k)-self%cfg%zm(k-1)] !< Linear interpolation in z from [xm,ym,zm] to [xm,ym,z]
+          end do
+       end do
+    end do
+    
     ! Loop over the domain and zero divergence in walls
     do k=self%cfg%kmin_,self%cfg%kmax_
        do j=self%cfg%jmin_,self%cfg%jmax_
@@ -647,7 +668,7 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    integer :: i,j,k,ierr
+    integer :: i,ierr
     real(WP) :: mydt,dt_done,deng,Ip
     real(WP), dimension(3) :: acc,torque,dmom
     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: sx,sy,sz
@@ -889,6 +910,285 @@ contains
     ! Apply volume filter
     call this%filter(this%VF)
   end subroutine update_VF
+
+
+  !> Compute pseudo-turbulent kinetic energy and Reynolds stresses
+  !> Mehrabadi et al. (2015) "Pseudo-turbulent gas-phase velocity 
+  !> fluctuations in homogeneous gas–solid flow:
+  !> fixed particle assemblies and freely evolving suspensions"
+  subroutine get_ptke(this,dt,Ui,Vi,Wi,visc,rho,srcU,srcV,srcW)
+    use mathtools, only: Pi
+    use messager, only: die
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Ui     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Vi     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Wi     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(:,:,:), allocatable :: slip_x,slip_y,slip_z,Re
+    real(WP), dimension(:,:,:,:), allocatable :: PTRS
+    real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+    integer :: i,j,k
+    real(WP) :: Vp,frho,fvisc,pVF,Rep,b_par,b_perp
+    real(WP), dimension(3) :: fvel,slip
+    real(WP), parameter :: a=0.523_WP,b=0.305_WP,c=0.144_WP,d=3.511_WP,e=1.801_WP,f=0.005_WP
+
+    ! Rotation variables
+    integer :: ind
+    real(WP), parameter :: one_third=1.0_WP/3.0_WP
+    real(WP) :: U1_dot,U2_dot,U3_dot,rhoK
+    real(WP), dimension(3) :: U1,U2,U3
+    real(WP), dimension(3,3) :: Q,temp,bij
+
+    allocate(slip_x(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); slip_x=0.0_WP
+    allocate(slip_y(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); slip_y=0.0_WP
+    allocate(slip_z(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); slip_z=0.0_WP
+    allocate(Re(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); Re=0.0_WP
+    allocate(PTRS(1:6,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+
+    ! Loop over all particles
+    do i=1,this%np_
+       ! Skip inactive particle
+       if (this%p(i)%flag.eq.1.or.this%p(i)%id.eq.0) cycle
+
+       ! Interpolate fluid quantities to particle location
+       fvel(1)=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=Ui,bc='n')
+       fvel(2)=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=Vi,bc='n')
+       fvel(3)=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=Wi,bc='n')
+       fvisc=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=visc,bc='n')
+       fvisc=fvisc+epsilon(1.0_WP)
+       frho=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=rho,bc='n')
+       pVF=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF,bc='n')
+       pVF=pVF+epsilon(1.0_WP)
+
+       ! Compute particle slip and Reynolds number
+       slip=this%p(i)%vel-fvel
+       Rep=frho*norm2(slip)*this%p(i)%d/fvisc
+
+       ! Transfer to the grid
+       Vp=Pi/6.0_WP*this%p(i)%d**3
+       call this%cfg%set_scalar(Sp=Vp*slip(1)/pVF,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=slip_x,bc='n')
+       call this%cfg%set_scalar(Sp=Vp*slip(2)/pVF,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=slip_y,bc='n')
+       call this%cfg%set_scalar(Sp=Vp*slip(3)/pVF,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=slip_z,bc='n')
+       call this%cfg%set_scalar(Sp=Vp*Rep/pVF    ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=Re    ,bc='n')
+    end do
+    slip_x=slip_x/this%cfg%vol
+    slip_y=slip_y/this%cfg%vol
+    slip_z=slip_z/this%cfg%vol
+    Re=Re/this%cfg%vol
+    ! Sum at boundaries
+    call this%cfg%syncsum(slip_x)
+    call this%cfg%syncsum(slip_y)
+    call this%cfg%syncsum(slip_z)
+    call this%cfg%syncsum(Re)
+    ! Apply volume filter
+    call this%filter(slip_x)
+    call this%filter(slip_y)
+    call this%filter(slip_z)
+    call this%filter(Re)
+
+    PTRS=0.0_WP
+    do k=this%cfg%kmino_,this%cfg%kmaxo_
+       do j=this%cfg%jmino_,this%cfg%jmaxo_
+          do i=this%cfg%imino_,this%cfg%imaxo_
+             ! Get Eulerian particle data (remove volume fraction)
+             slip(1)=slip_x(i,j,k)
+             slip(2)=slip_y(i,j,k)
+             slip(3)=slip_z(i,j,k)
+             Rep=Re(i,j,k)
+             pVF=this%VF(i,j,k)
+
+             ! Compute PTKE
+             this%ptke(i,j,k) = 2.0_WP*pVF + 2.5_WP*pVF*(1.0_WP-pVF)**3*exp(-pVF*sqrt(Rep))
+             this%ptke(i,j,k) = this%ptke(i,j,k)*0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)
+             
+             !  Assume isotropic in 2D
+             if (this%cfg%nx.eq.1) then
+                bij = 0.0_WP
+                bij(2,2) = 0.5_WP
+                bij(3,3) = 0.5_WP
+             else if (this%cfg%ny.eq.1) then
+                bij = 0.0_WP
+                bij(1,1) = 0.5_WP
+                bij(3,3) = 0.5_WP
+             else if (this%cfg%nz.eq.1) then
+                bij = 0.0_WP
+                bij(1,1) = 0.5_WP
+                bij(2,2) = 0.5_WP
+             else
+                ! Apply rotation in 3D
+                b_par  = a/(1.0_WP+b*exp(-c*Rep))*exp(-d*pVF/(1.0_WP+e*exp(-f*Rep)))
+                b_perp = -0.5_WP*b_par
+
+                ! Add trace
+                b_par  = b_par  + one_third
+                b_perp = b_perp + one_third
+
+                ! Compute the reference axes
+                U1 = slip
+                U1_dot = dot_product(U1,U1)+epsilon(1.0_WP)
+
+                ! Generate an orthonormal set based on max slip component
+                ind = maxloc(abs(U1),dim=1)
+                select case (ind)
+                case(1)
+                   ! Max slip in x-direction
+                   U2     = -(U1(2)/U1_dot)*U1
+                   U2(2)  = 1.0_WP + U2(2)
+                   U2_dot = dot_product(U2,U2)+epsilon(1.0_WP)
+                case(2)
+                   ! Max slip in y-direction
+                   U2     = -(U1(1)/U1_dot)*U1
+                   U2(1)  = 1.0_WP + U2(1)
+                   U2_dot = dot_product(U2,U2)+epsilon(1.0_WP)
+                case(3)
+                   ! Max slip in z-direction
+                   U2     = -(U1(1)/U1_dot)*U1
+                   U2(1)  = 1.0_WP + U2(1)
+                   U2_dot = dot_product(U2,U2)+epsilon(1.0_WP)                
+                end select
+
+                ! U3 right-hand coordinate system (cross product)
+                U3(1) = U1(2)*U2(3) - U1(3)*U2(2)
+                U3(2) = U1(3)*U2(1) - U1(1)*U2(3)
+                U3(3) = U1(1)*U2(2) - U1(2)*U2(1)
+                U3_dot = dot_product(U3,U3)+epsilon(1.0_WP)
+
+                ! Normalize basis vectors
+                U1 = U1/sqrt(U1_dot)
+                U2 = U2/sqrt(U2_dot)
+                U3 = U3/sqrt(U3_dot)
+
+                ! Construct rotation matrices
+                Q(:,1) = U1
+                Q(:,2) = U2
+                Q(:,3) = U3
+
+                ! Multiply Q by b^dag
+                temp(1,1) = Q(1,1)*b_par
+                temp(2,1) = Q(2,1)*b_par
+                temp(3,1) = Q(3,1)*b_par
+
+                temp(1,2) = Q(1,2)*b_perp
+                temp(2,2) = Q(2,2)*b_perp
+                temp(3,2) = Q(3,2)*b_perp
+
+                temp(1,3) = Q(1,3)*b_perp
+                temp(2,3) = Q(2,3)*b_perp
+                temp(3,3) = Q(3,3)*b_perp
+
+                ! Multiply Q*b^dag (temp) by Q^T  to get bij tensor
+                bij(1,1) = temp(1,1)*Q(1,1) + temp(1,2)*Q(1,2) + temp(1,3)*Q(1,3)
+                bij(1,2) = temp(1,1)*Q(2,1) + temp(1,2)*Q(2,2) + temp(1,3)*Q(2,3)
+                bij(1,3) = temp(1,1)*Q(3,1) + temp(1,2)*Q(3,2) + temp(1,3)*Q(3,3)
+
+                bij(2,1) = temp(2,1)*Q(1,1) + temp(2,2)*Q(1,2) + temp(2,3)*Q(1,3)
+                bij(2,2) = temp(2,1)*Q(2,1) + temp(2,2)*Q(2,2) + temp(2,3)*Q(2,3)
+                bij(2,3) = temp(2,1)*Q(3,1) + temp(2,2)*Q(3,2) + temp(2,3)*Q(3,3)
+
+                bij(3,1) = temp(3,1)*Q(1,1) + temp(3,2)*Q(1,2) + temp(3,3)*Q(1,3)
+                bij(3,2) = temp(3,1)*Q(2,1) + temp(3,2)*Q(2,2) + temp(3,3)*Q(2,3)
+                bij(3,3) = temp(3,1)*Q(3,1) + temp(3,2)*Q(3,2) + temp(3,3)*Q(3,3)
+
+             end if
+
+             ! Store the Reynolds stress
+             rhoK=rho(i,j,k)*this%ptke(i,j,k)
+             PTRS(1,i,j,k) = 2.0_WP*rhoK*bij(1,1)
+             PTRS(2,i,j,k) = 2.0_WP*rhoK*bij(2,2)
+             PTRS(3,i,j,k) = 2.0_WP*rhoK*bij(3,3)
+             PTRS(4,i,j,k) = 2.0_WP*rhoK*bij(1,2)
+             PTRS(5,i,j,k) = 2.0_WP*rhoK*bij(2,3)
+             PTRS(6,i,j,k) = 2.0_WP*rhoK*bij(1,3)
+          end do
+       end do
+    end do
+
+    ! Return source terms
+    if (present(srcU)) then
+       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       ! Interpolate PTRS to cell face
+       do k=this%cfg%kmin_,this%cfg%kmax_+1
+          do j=this%cfg%jmin_,this%cfg%jmax_+1
+             do i=this%cfg%imin_,this%cfg%imax_+1
+                FX(i,j,k)=sum(this%itpr_x(:,i,j,k)*PTRS(1,i-1:i,j,k))
+                FY(i,j,k)=sum(this%itpr_y(:,i,j,k)*PTRS(4,i,j-1:j,k))
+                FZ(i,j,k)=sum(this%itpr_z(:,i,j,k)*PTRS(6,i,j,k-1:k))
+             end do
+          end do
+       end do
+       ! Take divergence
+       do k=this%cfg%kmin_,this%cfg%kmax_
+          do j=this%cfg%jmin_,this%cfg%jmax_
+             do i=this%cfg%imin_,this%cfg%imax_
+                srcU(i,j,k)=-dt*(sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1)))
+             end do
+          end do
+       end do
+       call this%cfg%sync(srcU)
+       deallocate(FX,FY,FZ)
+    end if
+    if (present(srcV)) then
+       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       ! Interpolate PTRS to cell face
+       do k=this%cfg%kmin_,this%cfg%kmax_+1
+          do j=this%cfg%jmin_,this%cfg%jmax_+1
+             do i=this%cfg%imin_,this%cfg%imax_+1
+                FX(i,j,k)=sum(this%itpr_x(:,i,j,k)*PTRS(4,i-1:i,j,k))
+                FY(i,j,k)=sum(this%itpr_y(:,i,j,k)*PTRS(2,i,j-1:j,k))
+                FZ(i,j,k)=sum(this%itpr_z(:,i,j,k)*PTRS(5,i,j,k-1:k))
+             end do
+          end do
+       end do
+       ! Take divergence
+       do k=this%cfg%kmin_,this%cfg%kmax_
+          do j=this%cfg%jmin_,this%cfg%jmax_
+             do i=this%cfg%imin_,this%cfg%imax_
+                srcV(i,j,k)=-dt*(sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1)))
+             end do
+          end do
+       end do
+       call this%cfg%sync(srcV)
+       deallocate(FX,FY,FZ)
+    end if
+    if (present(srcW)) then
+       allocate(FX(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       allocate(FY(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       allocate(FZ(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+       ! Interpolate PTRS to cell face
+       do k=this%cfg%kmin_,this%cfg%kmax_+1
+          do j=this%cfg%jmin_,this%cfg%jmax_+1
+             do i=this%cfg%imin_,this%cfg%imax_+1
+                FX(i,j,k)=sum(this%itpr_x(:,i,j,k)*PTRS(6,i-1:i,j,k))
+                FY(i,j,k)=sum(this%itpr_y(:,i,j,k)*PTRS(5,i,j-1:j,k))
+                FZ(i,j,k)=sum(this%itpr_z(:,i,j,k)*PTRS(3,i,j,k-1:k))
+             end do
+          end do
+       end do
+       ! Take divergence
+       do k=this%cfg%kmin_,this%cfg%kmax_
+          do j=this%cfg%jmin_,this%cfg%jmax_
+             do i=this%cfg%imin_,this%cfg%imax_
+                srcW(i,j,k)=-dt*(sum(this%div_x(:,i,j,k)*FX(i:i+1,j,k))+sum(this%div_y(:,i,j,k)*FY(i,j:j+1,k))+sum(this%div_z(:,i,j,k)*FZ(i,j,k:k+1)))
+             end do
+          end do
+       end do
+       call this%cfg%sync(srcW)
+       deallocate(FX,FY,FZ)
+    end if
+
+    ! Clean up
+    deallocate(slip_x,slip_y,slip_z,Re,PTRS)
+  end subroutine get_ptke
 
 
   !> Laplacian filtering operation
@@ -1180,7 +1480,6 @@ contains
       implicit none
       real(WP), dimension(3) :: pos
       real(WP) :: rand,r,theta
-      integer :: ip,jp,kp
       ! Set x position
       pos(1) = this%inj_pos(1)
       ! Random y & z position within a circular region
@@ -1433,8 +1732,8 @@ contains
     type(part), dimension(:), allocatable :: torecv
     integer :: no,nsend,nrecv
     type(MPI_Status) :: status
-    integer :: icnt,isrc,idst,ierr
-    integer :: i,n
+    integer :: isrc,idst,ierr
+    integer :: n
 
     ! Check overlap size
     if (present(nover)) then

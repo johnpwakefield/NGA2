@@ -24,9 +24,9 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
-LAPACK_DIR= /opt/homebrew/Cellar/lapack/3.10.1_1
-HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre/
-FFTW_DIR=/opt/homebrew/Cellar/fftw/3.3.10_1
+#LAPACK_DIR= /opt/homebrew/Cellar/lapack/3.10.1_1
+#HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre/
+#FFTW_DIR=/opt/homebrew/Cellar/fftw/3.3.10_1
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

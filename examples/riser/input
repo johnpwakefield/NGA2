@@ -2,7 +2,7 @@
 Partition :	4 1 1
 
 # Mesh definition
-Pipe length   : 0.08	
+Pipe length   : 0.08
 Pipe diameter : .01
 nx :	570
 ny :	70
@@ -21,7 +21,7 @@ Gravity           : -9.81 0 0
 
 # Particle properties
 Particle timestep size      : 1e-6
-Collision timescale         : 15e-6	
+Collision timescale         : 15e-6
 Particle volume fraction    : 0.02
 Particle mean diameter      : 58e-6
 Particle standard deviation : 25-6

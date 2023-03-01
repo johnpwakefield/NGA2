@@ -1,25 +1,25 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,           only: WP
-   use geometry,            only: cfg,D,get_VF
-   use hypre_str_class,     only: hypre_str
-   use fouriersolver_class, only: fouriersolver
-   use incomp_class,        only: incomp
-   use sgsmodel_class,      only: sgsmodel
-   use timetracker_class,   only: timetracker
-   use ensight_class,       only: ensight
-   use event_class,         only: event
-   use monitor_class,       only: monitor
+   use precision,         only: WP
+   use geometry,          only: cfg,D,get_VF
+   use hypre_str_class,   only: hypre_str
+   use fftsolver_class,   only: fftsolver
+   use incomp_class,      only: incomp
+   use sgsmodel_class,    only: sgsmodel
+   use timetracker_class, only: timetracker
+   use ensight_class,     only: ensight
+   use event_class,       only: event
+   use monitor_class,     only: monitor
    implicit none
    private
 
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
-   type(incomp),        public :: fs
-   !type(hypre_str),     public :: ps
-   type(fouriersolver), public :: ps
-   type(hypre_str),     public :: vs
-   type(sgsmodel),      public :: sgs
-   type(timetracker),   public :: time
+   type(incomp),      public :: fs
+   !type(hypre_str),   public :: ps
+   type(fftsolver),   public :: ps
+   type(hypre_str),   public :: vs
+   type(sgsmodel),    public :: sgs
+   type(timetracker), public :: time
 
    !> Ensight postprocessing
    type(ensight)  :: ens_out
@@ -103,7 +103,7 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
-         ps=fouriersolver(cfg=cfg,name='Pressure',nst=7)
+         ps=fftsolver(cfg=cfg,name='Pressure',nst=7)
          !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          !ps%maxlevel=14
          !call param_read('Pressure iteration',ps%maxit)

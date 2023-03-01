@@ -5,7 +5,6 @@ NGA_HOME ?= ../..
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_FFTW  = TRUE
-USE_P3DFFT= TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
@@ -32,7 +31,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core constant_density data solver config grid libraries
+Bdirs   := core constant_density solver config grid libraries particles data
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
@@ -48,3 +47,4 @@ all: $(executable)
 
 # NGA compilation rules
 include $(NGA_HOME)/tools/GNUMake/Make.rules
+

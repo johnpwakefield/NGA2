@@ -1,27 +1,28 @@
 !> 3D FFT pressure solver concept is defined by extension of the linsol class
 !> This solver is specifically intended to be a FFT-based pressure Poisson solver
 !> for 3D periodic uniform computational domains decomposed in at most 2 directions
-!> uses fourier3d for Fourier transform
-module fouriersolver_class
-  use precision,       only: WP
-  use config_class,    only: config
-  use fourier3d_class, only: fourier3d
-  use string,          only: str_short
-  use linsol_class,    only: linsol
+!> uses fft3d for Fourier transform
+
+module fftsolver_class
+  use precision,    only: WP
+  use config_class, only: config
+  use fft3d_class,  only: fft3d
+  use string,       only: str_short
+  use linsol_class, only: linsol
   use, intrinsic :: iso_c_binding
   implicit none
   private
 
 
   ! Expose type/constructor/methods
-  public :: fouriersolver
+  public :: fftsolver
 
 
-  !> fouriersolver object definition
-  type, extends(linsol) :: fouriersolver
+  !> fftsolver object definition
+  type, extends(linsol) :: fftsolver
 
     ! FFT object
-    class(fourier3d), allocatable :: dft
+    class(fft3d), allocatable :: dft
 
     !> Unstrided arrays
     complex(WP), dimension(:,:,:), allocatable :: factored_operator
@@ -29,29 +30,29 @@ module fouriersolver_class
 
   contains
 
-    procedure :: print_short=>fouriersolver_print_short   !< One-line printing of solver status
-    procedure :: print=>fouriersolver_print               !< Long-form printing of solver status
-    procedure :: log=>fouriersolver_log                   !< Long-form logging of solver status
-    procedure :: init=>fouriersolver_init                 !< Grid and stencil initialization - done once for the grid and stencil
-    procedure :: setup=>fouriersolver_setup               !< Solver setup (every time the operator changes)
-    procedure :: solve=>fouriersolver_solve               !< Execute solver (assumes new RHS and initial guess at every call)
-    procedure :: destroy=>fouriersolver_destroy
+    procedure :: print_short=>fftsolver_print_short   !< One-line printing of solver status
+    procedure :: print=>fftsolver_print               !< Long-form printing of solver status
+    procedure :: log=>fftsolver_log                   !< Long-form logging of solver status
+    procedure :: init=>fftsolver_init                 !< Grid and stencil initialization - done once for the grid and stencil
+    procedure :: setup=>fftsolver_setup               !< Solver setup (every time the operator changes)
+    procedure :: solve=>fftsolver_solve               !< Execute solver (assumes new RHS and initial guess at every call)
+    procedure :: destroy=>fftsolver_destroy
 
-  end type fouriersolver
+  end type fftsolver
 
 
-  !> Declare fouriersolver constructor
-  interface fouriersolver; procedure fouriersolver_from_args; end interface fouriersolver;
+  !> Declare fftsolver constructor
+  interface fftsolver; procedure fftsolver_from_args; end interface fftsolver;
 
 
 contains
 
 
-  !> Constructor for a fouriersolver object
-  function fouriersolver_from_args(cfg,name,nst) result(self)
+  !> Constructor for a fftsolver object
+  function fftsolver_from_args(cfg,name,nst) result(self)
     use messager, only: die
     implicit none
-    type(fouriersolver) :: self
+    type(fftsolver) :: self
     class(config), target, intent(in) :: cfg
     character(len=*), intent(in) :: name
     integer, intent(in) :: nst
@@ -85,18 +86,17 @@ contains
     ! Setup is not done
     self%setup_done=.false.
 
-  end function fouriersolver_from_args
+  end function fftsolver_from_args
 
 
   !> Initialize grid and stencil - done at start-up only as long as the stencil or cfg does not change
   !> When calling, zero values of this%opr(1,:,:,:) indicate cells that do not participate in the solver
   !> Only the stencil needs to be defined at this point
-  subroutine fouriersolver_init(this)
+  subroutine fftsolver_init(this)
     use messager, only: die
     implicit none
-    class(fouriersolver), intent(inout) :: this
-    integer :: ierr,st,stx1,stx2,sty1,sty2,stz1,stz2
-    integer, dimension(3) :: periodicity,offset
+    class(fftsolver), intent(inout) :: this
+    integer :: st,stx1,stx2,sty1,sty2,stz1,stz2
     include 'fftw3.f03'
 
     ! From the provided stencil, generate an inverse map
@@ -109,18 +109,18 @@ contains
     end do
 
     ! Initialize DFT
-    this%dft=fourier3d(this%cfg)
+    this%dft=fft3d(this%cfg)
 
-  end subroutine fouriersolver_init
+  end subroutine fftsolver_init
 
 
   !> Setup solver - done everytime the operator changes
-  subroutine fouriersolver_setup(this)
+  subroutine fftsolver_setup(this)
     use messager, only: die
     use mpi_f08,  only: MPI_BCAST,MPI_ALLREDUCE,MPI_INTEGER,MPI_SUM
     use parallel, only: MPI_REAL_WP
     implicit none
-    class(fouriersolver), intent(inout) :: this
+    class(fftsolver), intent(inout) :: this
     real(WP), dimension(1:this%nst) :: ref_opr
     integer :: i,j,k,n,ierr
 
@@ -139,7 +139,7 @@ contains
           end do
         end do
       end do
-      if (.not.circulant) call die('[fouriersolver setup] operator must be uniform in space')
+      if (.not.circulant) call die('[fftsolver setup] operator must be uniform in space')
     end block checkcirc
 
     ! Build the operator
@@ -155,7 +155,7 @@ contains
     end do
 
     ! Take transform of operator
-    call this%dft%fourier3d_fourier_transform(this%factored_operator)
+    call this%dft%forward_transform(this%factored_operator)
 
     ! Make zero wavenumber not zero
     ! Setting this to one has the nice side effect of returning a solution with the same integral
@@ -167,7 +167,7 @@ contains
     call MPI_ALLREDUCE(i,j,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
     if (j.gt.0) then
       write(*,*) j
-      call die('[fouriersolver setup] elements of transformed operator near zero')
+      call die('[fftsolver setup] elements of transformed operator near zero')
     end if
 
     ! Divide now instead of later
@@ -176,24 +176,23 @@ contains
     ! Check for division issues
     i=count(isnan(abs(this%factored_operator)))
     call MPI_ALLREDUCE(i,j,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
-    if (j.gt.0) call die('[fouriersolver setup] elements of transformed operator are NaN')
+    if (j.gt.0) call die('[fftsolver setup] elements of transformed operator are NaN')
 
     ! Set setup-flag to true
     this%setup_done=.true.
 
-  end subroutine fouriersolver_setup
+  end subroutine fftsolver_setup
 
 
   !> Solve the linear system iteratively
-  subroutine fouriersolver_solve(this)
+  subroutine fftsolver_solve(this)
     use messager, only: die
     use param,    only: verbose
     implicit none
-    class(fouriersolver), intent(inout) :: this
-    integer :: i,j,k,ierr
+    class(fftsolver), intent(inout) :: this
 
     ! Check that setup was done
-    if (.not.this%setup_done) call die('[fouriersolver solve] Solver has not &
+    if (.not.this%setup_done) call die('[fftsolver solve] Solver has not &
       &been setup.')
 
     ! Copy to unstrided array
@@ -201,17 +200,17 @@ contains
       this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)
 
     ! Forward transform
-    call this%dft%fourier3d_fourier_transform(this%transformed_rhs)
+    call this%dft%forward_transform(this%transformed_rhs)
 
     ! Divide
     this%transformed_rhs=this%transformed_rhs*this%factored_operator
 
     ! Backward transform
-    call this%dft%fourier3d_inverse_transform(this%transformed_rhs)
+    call this%dft%backward_transform(this%transformed_rhs)
 
     ! Copy to strided output
     this%sol(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,     &
-      this%cfg%kmin_:this%cfg%kmax_)=this%transformed_rhs
+      this%cfg%kmin_:this%cfg%kmax_)=realpart(this%transformed_rhs)
 
     ! Sync the solution vector
     call this%cfg%sync(this%sol)
@@ -220,59 +219,59 @@ contains
     if (verbose.gt.0) call this%log
     if (verbose.gt.1) call this%print_short
 
-  end subroutine fouriersolver_solve
+  end subroutine fftsolver_solve
 
 
-  !> Log fouriersolver info
-  subroutine fouriersolver_log(this)
+  !> Log fftsolver info
+  subroutine fftsolver_log(this)
     use string,   only: str_long
     use messager, only: log
     implicit none
-    class(fouriersolver), intent(in) :: this
+    class(fftsolver), intent(in) :: this
     character(len=str_long) :: message
 
     if (this%cfg%amRoot) then
-      write(message,'("fouriersolver solver [",a,"] for config [",a,"]")')    &
+      write(message,'("fftsolver solver [",a,"] for config [",a,"]")')    &
         trim(this%name), trim(this%cfg%name)
       call log(message)
     end if
 
-  end subroutine fouriersolver_log
+  end subroutine fftsolver_log
 
 
-  !> Print fouriersolver info to the screen
-  subroutine fouriersolver_print(this)
+  !> Print fftsolver info to the screen
+  subroutine fftsolver_print(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
-    class(fouriersolver), intent(in) :: this
+    class(fftsolver), intent(in) :: this
 
     if (this%cfg%amRoot) then
-      write(output_unit,'("fouriersolver solver [",a,"] for config [",a,"]")') &
+      write(output_unit,'("fftsolver solver [",a,"] for config [",a,"]")') &
         trim(this%name), trim(this%cfg%name)
     end if
 
-  end subroutine fouriersolver_print
+  end subroutine fftsolver_print
 
 
-  !> Short print of fouriersolver info to the screen
-  subroutine fouriersolver_print_short(this)
+  !> Short print of fftsolver info to the screen
+  subroutine fftsolver_print_short(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
-    class(fouriersolver), intent(in) :: this
+    class(fftsolver), intent(in) :: this
 
-    if (this%cfg%amRoot) write(output_unit,'("fouriersolver solver [",a16,"] &
+    if (this%cfg%amRoot) write(output_unit,'("fftsolver solver [",a16,"] &
       &for config [",a16,"]")') trim(this%name),trim(this%cfg%name)
 
-  end subroutine fouriersolver_print_short
+  end subroutine fftsolver_print_short
 
-  subroutine fouriersolver_destroy(this)
+  subroutine fftsolver_destroy(this)
     implicit none
-    class(fouriersolver), intent(inout) :: this
+    class(fftsolver), intent(inout) :: this
 
     deallocate(this%stc,this%opr,this%rhs,this%sol,this%factored_operator,    &
       this%transformed_rhs,this%stmap)
 
-  end subroutine fouriersolver_destroy
+  end subroutine fftsolver_destroy
 
-end module fouriersolver_class
+end module fftsolver_class
 

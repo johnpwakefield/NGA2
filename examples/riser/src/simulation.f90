@@ -1,27 +1,27 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-  use string,               only: str_medium
-  use precision,            only: WP
-  use geometry,             only: cfg,D,get_VF
-  use lowmach_class,        only: lowmach
-  use fouriersolver_class,  only: fouriersolver
-  use hypre_str_class,      only: hypre_str
-  use lpt_class,            only: lpt
-  use timetracker_class,    only: timetracker
-  use ensight_class,        only: ensight
-  use partmesh_class,       only: partmesh
-  use event_class,          only: event
-  use datafile_class,       only: datafile
-  use monitor_class,        only: monitor
+  use string,             only: str_medium
+  use precision,          only: WP
+  use geometry,           only: cfg,D,get_VF
+  use lowmach_class,      only: lowmach
+  use fftsolver_class,    only: fftsolver
+  use hypre_str_class,    only: hypre_str
+  use lpt_class,          only: lpt
+  use timetracker_class,  only: timetracker
+  use ensight_class,      only: ensight
+  use partmesh_class,     only: partmesh
+  use event_class,        only: event
+  use datafile_class,     only: datafile
+  use monitor_class,      only: monitor
   implicit none
   private
 
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker
-  type(lowmach),       public :: fs
-  type(fouriersolver), public :: ps
-  type(hypre_str),     public :: vs
-  type(lpt),           public :: lp
-  type(timetracker),   public :: time
+  type(lowmach),      public :: fs
+  type(fftsolver),    public :: ps
+  type(hypre_str),    public :: vs
+  type(lpt),          public :: lp
+  type(timetracker),  public :: time
 
   !> Provide a datafile and an event tracker for saving restarts
   type(event)    :: save_evt
@@ -228,7 +228,7 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      ps=fouriersolver(cfg=cfg,name='Pressure',nst=7)
+      ps=fftsolver(cfg=cfg,name='Pressure',nst=7)
       ! Configure implicit velocity solver
       vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
       call param_read('Implicit iteration',vs%maxit)

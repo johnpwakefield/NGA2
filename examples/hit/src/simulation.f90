@@ -1,23 +1,23 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-   use precision,           only: WP
-   use geometry,            only: cfg
-   use fouriersolver_class, only: fouriersolver
-   use incomp_class,        only: incomp
-   use timetracker_class,   only: timetracker
-   use ensight_class,       only: ensight
-   use partmesh_class,      only: partmesh
-   use event_class,         only: event
-   use monitor_class,       only: monitor
-   use datafile_class,      only: datafile
-   use string,              only: str_medium
+   use precision,         only: WP
+   use geometry,          only: cfg
+   use fftsolver_class,   only: fftsolver
+   use incomp_class,      only: incomp
+   use timetracker_class, only: timetracker
+   use ensight_class,     only: ensight
+   use partmesh_class,    only: partmesh
+   use event_class,       only: event
+   use monitor_class,     only: monitor
+   use datafile_class,    only: datafile
+   use string,            only: str_medium
    implicit none
    private
 
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(fouriersolver), public :: ps
-   type(incomp),        public :: fs
-   type(timetracker),   public :: time
+   type(fftsolver),   public :: ps
+   type(incomp),      public :: fs
+   type(timetracker), public :: time
 
    !> Ensight postprocessing
    type(partmesh) :: pmesh
@@ -193,7 +193,7 @@ module simulation
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=fouriersolver(cfg=cfg,name='Pressure',nst=7)
+         ps=fftsolver(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -202,7 +202,6 @@ module simulation
       initialize_velocity: block
          use random,   only: random_normal
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-         use parallel, only: MPI_REAL_WP
          use mathtools,only: Pi
          integer :: i,j,k
          ! Read in forcing, grid, and initial velocity field parameters
@@ -372,7 +371,6 @@ module simulation
    subroutine simulation_run
       use parallel,       only: parallel_time
       implicit none
-      integer :: ii
 
       ! Perform time integration
       do while (.not.time%done())

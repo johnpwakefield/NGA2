@@ -1,4 +1,8 @@
 f90EXE_sources += datafile_class.f90 ensight_class.f90
 
+ifeq ($(DO_ESTIMCLOSURES),TRUE)
+  f90EXE_sources += estimclosures_class.f90
+endif
+
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/data
 VPATH_LOCATIONS   += $(NGA_HOME)/src/data

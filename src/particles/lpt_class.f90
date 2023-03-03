@@ -11,7 +11,7 @@ module lpt_class
 
 
   ! Expose type/constructor/methods
-  public :: lpt
+  public :: lpt, part
 
 
   !> Memory adaptation parameter
@@ -79,7 +79,7 @@ module lpt_class
      ! Solver parameters
      real(WP) :: nstep=1                                 !< Number of substeps (default=1)
      character(len=str_medium), public :: drag_model     !< Drag model
-     
+
      ! Collisional parameters
      real(WP) :: tau_col                                 !< Characteristic collision time scale
      real(WP) :: e_n                                     !< Normal restitution coefficient
@@ -238,7 +238,7 @@ contains
           end do
        end do
     end do
-    
+
     ! Loop over the domain and zero divergence in walls
     do k=self%cfg%kmin_,self%cfg%kmax_
        do j=self%cfg%jmin_,self%cfg%jmax_
@@ -367,7 +367,7 @@ contains
     end block logging
 
   end function constructor
-  
+
 
   !> Resolve collisional interaction between particles, walls, and an optional IB level set
   !> Requires tau_col, e_n, e_w and mu_f to be set beforehand
@@ -397,7 +397,7 @@ contains
         this%p(i)%Tcol=0.0_WP
      end do
    end block zero_force
-   
+
    ! Then share particles across overlap
    call this%share()
 
@@ -467,7 +467,7 @@ contains
 
         ! Cycle if id<=0
         if (this%p(i1)%id.le.0) cycle collision
-        
+
         ! Store particle data
         r1=this%p(i1)%pos
         v1=this%p(i1)%vel
@@ -609,7 +609,7 @@ contains
                        ! Add up the collisions
                        this%ncol=this%ncol+1
                     end if
-                    
+
                  end do
 
               end do
@@ -641,7 +641,7 @@ contains
    end block collision_force
 
  end subroutine collide
-  
+
 
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
@@ -679,7 +679,7 @@ contains
     if (present(srcV)) srcV=0.0_WP
     if (present(srcW)) srcW=0.0_WP
     if (present(srcE)) srcE=0.0_WP
-    
+
     ! Get fluid stress
     if (present(stress_x)) then
       sx=stress_x
@@ -847,7 +847,7 @@ contains
          ! Tenneti and Subramaniam (2011)
          b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
          b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-         corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)           
+         corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)
       case('Khalloufi Capecelatro','KC')
          !> Todo
       case default
@@ -913,7 +913,7 @@ contains
 
 
   !> Compute pseudo-turbulent kinetic energy and Reynolds stresses
-  !> Mehrabadi et al. (2015) "Pseudo-turbulent gas-phase velocity 
+  !> Mehrabadi et al. (2015) "Pseudo-turbulent gas-phase velocity
   !> fluctuations in homogeneous gas–solid flow:
   !> fixed particle assemblies and freely evolving suspensions"
   subroutine get_ptke(this,dt,Ui,Vi,Wi,visc,rho,srcU,srcV,srcW)
@@ -1006,7 +1006,7 @@ contains
              ! Compute PTKE
              this%ptke(i,j,k) = 2.0_WP*pVF + 2.5_WP*pVF*(1.0_WP-pVF)**3*exp(-pVF*sqrt(Rep))
              this%ptke(i,j,k) = this%ptke(i,j,k)*0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)
-             
+
              !  Assume isotropic in 2D
              if (this%cfg%nx.eq.1) then
                 bij = 0.0_WP
@@ -1050,7 +1050,7 @@ contains
                    ! Max slip in z-direction
                    U2     = -(U1(1)/U1_dot)*U1
                    U2(1)  = 1.0_WP + U2(1)
-                   U2_dot = dot_product(U2,U2)+epsilon(1.0_WP)                
+                   U2_dot = dot_product(U2,U2)+epsilon(1.0_WP)
                 end select
 
                 ! U3 right-hand coordinate system (cross product)
@@ -1219,7 +1219,7 @@ contains
              end do
           end do
        end do
-       call this%tridiag%linsol_x()         
+       call this%tridiag%linsol_x()
        ! Inverse in Y-direction
        do k=this%cfg%kmin_,this%cfg%kmax_
           do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1245,7 +1245,7 @@ contains
              end do
           end do
        end do
-       call this%tridiag%linsol_z()        
+       call this%tridiag%linsol_z()
        ! Update A
        do k=this%cfg%kmin_,this%cfg%kmax_
           do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1310,7 +1310,7 @@ contains
     type(part), dimension(:), allocatable :: p2
     type(MPI_Status) :: status
     logical :: avoid_overlap_,overlap
-    
+
     ! Initial number of particles
     np0_=this%np_
     this%np_new=0
@@ -1497,8 +1497,8 @@ contains
     end function get_position
 
   end subroutine inject
-  
-  
+
+
   !> Calculate the CFL
   subroutine get_cfl(this,dt,cflc,cfl)
     use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
@@ -1535,7 +1535,7 @@ contains
 
     ! If asked for, also return the maximum overall CFL
     if (present(CFL)) cfl=max(cflc,this%CFL_col)
-    
+
   end subroutine get_cfl
 
 

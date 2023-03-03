@@ -103,7 +103,7 @@ contains
 
 
   !> Constructor for a fft3d object
-  !>  (pgrid is a subclass of pgrid; a full cfg object can be passed here
+  !>  (pgrid is a subclass of config; a full cfg object can be passed here
   !>  without issue)
   function fft3d_from_args(pg) result(self)
     use messager, only: die

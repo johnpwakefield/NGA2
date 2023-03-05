@@ -1962,7 +1962,6 @@ contains
    
    !> Solve for implicit velocity residual
    subroutine solve_implicit(this,dt,resU,resV,resW)
-      use ils_class, only: amg
       implicit none
       class(lowmach), intent(inout) :: this
       real(WP), intent(in) :: dt

@@ -3,7 +3,12 @@
 !>
 !> The FFT-based pressure solver that uses this class internally may be found
 !> in fftsolver_clas.f90
-
+!>
+!> Unlike FFTW (and several other libaries), the transforms provided by this
+!> class have the correct scaling and sign.  `forward_transform` and
+!> `backward_transform` are truly inverses; multiplication of the inverse
+!> transform result by -Nx*Ny*Nz is not necessary.
+!>
 module fft3d_class
   use precision,    only: WP
   use pgrid_class,  only: pgrid
@@ -980,9 +985,6 @@ contains
       ! Transpose back
       call this%fft3d_ztranspose_backward(this%ztrans,A)
     end if
-
-    ! Oddball
-    if (this%oddball) A(this%pg%imin_,this%pg%jmin_,this%pg%kmin_)=0.0_WP
 
   end subroutine fft3d_fourier_transform
 

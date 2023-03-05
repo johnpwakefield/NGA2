@@ -703,7 +703,7 @@ contains
          write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/particle.******'
          ! Write the variables
          write(iunit,'(a)') 'VARIABLE'
-         write(iunit,'(a)') 'scalar per element: wall geometry.fvf'
+         write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
          do n=1,part%ptr%nvar
             write(iunit,'(a)') 'scalar per measured node: 1 '//trim(part%ptr%varname(n))//' '//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.******'
          end do
@@ -812,6 +812,139 @@ contains
       end do
       
    end subroutine write_part
+
+
+    !> Procedure that writes out a particle mesh in Ensight format using MPI I/O
+    subroutine write_part_parallel(this,part)
+      use precision, only: SP
+      use messager,  only: die
+      use parallel,  only: info_mpiio,MPI_REAL_SP
+      use mpi_f08
+      implicit none
+      class(ensight), intent(in) :: this
+      type(prt), pointer, intent(in) :: part
+      character(len=str_medium) :: filename
+      integer :: iunit,ierr,n
+      type(MPI_File) :: ifile
+      integer(kind=MPI_OFFSET_KIND) :: header_offset,offset,np_MOK
+      type(MPI_Status):: status
+      character(len=80) :: cbuff
+      integer :: i,ibuff,npart
+      integer, dimension(:), allocatable :: npart_proc,p_int
+
+      ! Store number of particles
+      allocate(npart_proc(this%cfg%nproc))
+      call MPI_ALLGATHER(part%ptr%n,1,MPI_INTEGER,npart_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
+      npart=sum(npart_proc)
+      
+      ! Write the case file from scratch in ASCII format
+      if (this%cfg%amRoot) then
+         ! Open the case file
+         open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(part%name)//'.case',form='formatted',status='replace',access='stream',iostat=ierr)
+         ! Write all the geometry information
+         write(iunit,'(a,/,a,/,/,a,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry','measured: 1 '//trim(part%name)//'/particle.******'
+         ! Write the variables
+         write(iunit,'(a)') 'VARIABLE'
+         write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
+         do n=1,part%ptr%nvar
+            write(iunit,'(a)') 'scalar per measured node: 1 '//trim(part%ptr%varname(n))//' '//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.******'
+         end do
+         do n=1,part%ptr%nvec
+            write(iunit,'(a)') 'vector per measured node: 1 '//trim(part%ptr%vecname(n))//' '//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.******'
+         end do
+         ! Write the time information
+         write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
+         write(iunit,'(999999(es12.5,/))') this%time
+         ! Close the case file
+         close(iunit)
+      end if
+
+      ! Generate the particle geometry file
+      filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/particle.'
+      write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+      ! Root write the header
+      if (this%cfg%amRoot) then
+         ! Open the file
+         open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+         if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+         ! General geometry header
+         cbuff='C Binary'                          ; write(iunit) cbuff
+         cbuff=trim(adjustl(part%ptr%name))        ; write(iunit) cbuff
+         cbuff='particle coordinates'              ; write(iunit) cbuff
+         ibuff=npart                               ; write(iunit) ibuff
+         ! Close the file
+         close(iunit)
+      end if
+      ! Parallel-write the particle data
+      call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+      if (ierr.ne.0) call die('[ensight write part] Problem encountered while parallel writing part file '//trim(filename))
+      header_offset=80*3+4
+      if (part%ptr%n.gt.0) then
+         allocate(p_int(part%ptr%n))
+         np_MOK=int(sum(npart_proc(1:this%cfg%rank)),MPI_OFFSET_KIND)
+         offset=header_offset+np_MOK*4
+         do i=1,part%ptr%n
+            p_int(i)=i+int(np_MOK)
+         end do
+         call MPI_FILE_WRITE_AT(ifile,offset,p_int,part%ptr%n,MPI_INTEGER,status,ierr)
+         offset=header_offset+npart*4+np_MOK*3*4
+         call MPI_FILE_WRITE_AT(ifile,offset,real(part%ptr%pos,SP),part%ptr%n*3,MPI_REAL_SP,status,ierr)
+         deallocate(p_int)
+      end if
+      call MPI_FILE_CLOSE(ifile,ierr)
+      
+      ! Generate the particle scalar files
+      do n=1,part%ptr%nvar
+         filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         ! Root write the header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+            ! General header
+            cbuff='particle '//trim(part%ptr%varname(n)); write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         ! Parallel-write the scalar at the particle location
+         call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+         if (ierr.ne.0) call die('[ensight write part] Problem encountered while parallel writing part file '//trim(filename))
+         if (part%ptr%n.gt.0) then
+            offset=80+np_MOK*4
+            call MPI_FILE_WRITE_AT(ifile,offset,real(part%ptr%var(n,:),SP),part%ptr%n,MPI_REAL_SP,status,ierr)
+         end if
+         call MPI_FILE_CLOSE(ifile,ierr)
+      end do
+      
+      ! Generate the particle vector files
+      do n=1,part%ptr%nvec
+         filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.'
+         write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
+         ! Root write the header
+         if (this%cfg%amRoot) then
+            ! Open the file
+            open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
+            if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
+            ! General header
+            cbuff='particle'//trim(adjustl(part%ptr%vecname(n)))     ; write(iunit) cbuff
+            ! Close the file
+            close(iunit)
+         end if
+         ! Write the vector at the particle location
+         call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
+         if (ierr.ne.0) call die('[ensight write part] Problem encountered while parallel writing part file '//trim(filename))
+         if (part%ptr%n.gt.0) then
+            offset=80+np_MOK*4*3
+            call MPI_FILE_WRITE_AT(ifile,offset,real(part%ptr%vec(:,n,:),SP),part%ptr%n*3,MPI_REAL_SP,status,ierr)
+         end if
+         call MPI_FILE_CLOSE(ifile,ierr)
+      end do
+
+      ! Clean up
+      deallocate(npart_proc)
+      
+   end subroutine write_part_parallel
    
    
 end module ensight_class

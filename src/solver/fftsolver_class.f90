@@ -158,9 +158,10 @@ contains
     call this%dft%forward_transform(this%factored_operator)
 
     ! Make zero wavenumber not zero
-    ! Setting this to one has the nice side effect of returning a solution with the same integral
+    ! Setting this to one has the nice side effect of returning a solution
+    ! with the same integral
     if (this%dft%oddball) this%factored_operator(this%cfg%imin_,this%cfg%jmin_,&
-      this%cfg%kmin_)=1.0_C_DOUBLE
+      this%cfg%kmin_)=(1.0_WP, 0.0_WP)
 
     ! Make sure other wavenumbers are not close to zero
     i=count(abs(this%factored_operator).lt.1000_WP*epsilon(1.0_WP))

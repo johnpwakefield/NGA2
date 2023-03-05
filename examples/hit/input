@@ -9,7 +9,7 @@ nx :	64
 Dynamic viscosity :    0.1
 Density :              1
 
-# Steadt-state (forcing) parameters
+# Steady-state (forcing) parameters
 Force to maximum Re_lambda : .true.
 Forcing constant     : 50.0
 

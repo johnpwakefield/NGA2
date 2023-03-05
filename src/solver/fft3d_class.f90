@@ -7,7 +7,9 @@
 !> Unlike FFTW (and several other libaries), the transforms provided by this
 !> class have the correct scaling and sign.  `forward_transform` and
 !> `backward_transform` are truly inverses; multiplication of the inverse
-!> transform result by -Nx*Ny*Nz is not necessary.
+!> transform result by -Nx*Ny*Nz is not necessary.  In addition, the real-space
+!> integral/Fourier-space zero value is preserved through forward and inverse
+!> transforms.
 !>
 module fft3d_class
   use precision,    only: WP

@@ -309,6 +309,8 @@ contains
 
     if (present(dealloc_sim_cfg) .and. dealloc_sim_cfg) deallocate(ec%sim_cfg)
 
+    deallocate(ec%fft_sg, ec%fft_pg, ec%fft)
+
     deallocate(ec%phi_r, ec%work_x_r, ec%work_y_r, ec%work_z_r, ec%phi_f,     &
       ec%vel_x_f, ec%vel_y_f, ec%vel_z_f, ec%work_x_f, ec%work_y_f,           &
       ec%work_z_f)
@@ -327,8 +329,6 @@ contains
     real(WP), intent(in) :: time
     integer, intent(in) :: step
     class(lpt), intent(in) :: ps
-    integer, dimension(ec%fft%pg%nproc) :: fftnp_
-    type(part), dimension(:), allocatable :: fftps_
     integer, dimension(3) :: ind, indmin, indmax
     real(WP) :: fft_rescale, pvol, dp_loc, vf_loc, drg_loc, dp, vf, drg
     real(WP), dimension(6) :: meanVV_loc, meanVV
@@ -337,7 +337,7 @@ contains
 
     ! rescaling values
     N3 = ec%fft%pg%nx * ec%fft%pg%ny * ec%fft%pg%nz
-    fft_rescale = 1.0_WP / N3
+    fft_rescale = 1.0_WP
     indmin(:) = (/ ec%fft%pg%imin, ec%fft%pg%jmin, ec%fft%pg%kmin /)
     indmax(:) = (/ ec%fft%pg%imax, ec%fft%pg%jmax, ec%fft%pg%kmax /)
     dxdydz(:) = (/ ec%fft%pg%dx(indmin(1)), ec%fft%pg%dy(indmin(2)), ec%fft%pg%dz(indmin(3)) /)
@@ -388,6 +388,9 @@ contains
 
     ! for each filter, convolve and compute means, write result
     do i = 1, ec%num_filters
+
+      ! set time and step in statpoint
+      ec%filters(i)%d%time = time; ec%filters(i)%d%step = step;
 
       ! compute filtered phi
       ec%phi_r = ec%phi_f * ec%filters(i)%flt_f

@@ -13,7 +13,8 @@ Num vortices y : 1
 
 # Constants
 Gravity : 0.0
-Particle relax time : 2.0
+Particle relax time : 1.6
+Equilibrium particle pressure : 1e-1
 
 # Initialization
 Initial rhopn : 1.0
@@ -23,9 +24,9 @@ Initial e12 : 1.6
 Initial e22 : 3.6
 
 # Time integration
-Max cfl number :    0.98
-Max timestep :      1e-4
+Max cfl number :    0.92
+Max timestep :      2e-2
 
 # Ensight output
-Ensight output period : 0.01
+Ensight output period : 0.02
 

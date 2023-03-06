@@ -3,7 +3,7 @@ module simulation
   use precision,            only: WP
   use geometry,             only: cfg
   use muscl_class,          only: muscl
-  use hyperbolic_houssem2d, only: make_houssem2d_muscl, houssem2d_rhs
+  use hyperbolic_houssem2d, only: make_houssem2d_muscl, houssem2d_rhs, houssem2d_backeuler
   use timetracker_class,    only: timetracker
   use ensight_class,        only: ensight
   use partmesh_class,       only: partmesh
@@ -28,17 +28,21 @@ module simulation
   real(WP), dimension(:,:,:,:), pointer :: p_vel
   real(WP), dimension(:,:,:), pointer :: scl_zeros
 
+  !> debug values for ensight output
+  real(WP), dimension(:,:,:), pointer :: csquared
+
   !> tg parameters
   real(WP) :: tg_nu
   integer :: tg_a, tg_b
 
   !> src params and storage arrays
+  real(WP), dimension(3) :: eqPp
   real(WP) :: taup
   real(WP), dimension(2) :: gvec
   real(WP), dimension(:,:,:,:), allocatable :: src_rhs, src_mid
 
   !> simulation monitor file
-  type(monitor) :: mfile, cflfile, consfile
+  type(monitor) :: mfile, cflfile, consfile, rangefile
 
   !> simulation control functions
   public :: simulation_init, simulation_run, simulation_final
@@ -73,8 +77,8 @@ contains
     do k = cfg%kmin_, cfg%kmax_
       do j = cfg%jmin_, cfg%jmax_
         do i = cfg%imin_, cfg%imax_
-          call  houssem2d_rhs(gvec, taup, fs%params(:,i,j,k), fs%Uc(:,i,j,k), &
-            & src_rhs(:,i,j,k))
+          call  houssem2d_rhs(eqPp, gvec, taup, fs%params(:,i,j,k),           &
+            fs%Uc(:,i,j,k), src_rhs(:,i,j,k))
         end do
       end do
     end do
@@ -85,8 +89,8 @@ contains
     do k = cfg%kmin_, cfg%kmax_
       do j = cfg%jmin_, cfg%jmax_
         do i = cfg%imin_, cfg%imax_
-          call  houssem2d_rhs(gvec, taup, fs%params(:,i,j,k),                 &
-            & src_mid(:,i,j,k), src_rhs(:,i,j,k))
+          call  houssem2d_rhs(eqPp, gvec, taup, fs%params(:,i,j,k),           &
+            src_mid(:,i,j,k), src_rhs(:,i,j,k))
         end do
       end do
     end do
@@ -102,8 +106,8 @@ contains
     do k = cfg%kmin_, cfg%kmax_
       do j = cfg%jmin_, cfg%jmax_
         do i = cfg%imin_, cfg%imax_
-          call  houssem2d_rhs(gvec, taup, fs%params(:,i,j,k), fs%Uc(:,i,j,k), &
-            & src_rhs(:,i,j,k))
+          call  houssem2d_rhs(eqPp, gvec, taup, fs%params(:,i,j,k),           &
+            fs%Uc(:,i,j,k), src_rhs(:,i,j,k))
         end do
       end do
     end do
@@ -111,6 +115,52 @@ contains
     fs%dU = time%dt * src_rhs
 
   end subroutine eulersrc
+
+  subroutine backeulersrc(dt)
+    implicit none
+    real(WP), intent(in) :: dt
+    integer :: i, j, k
+
+    do k = cfg%kmin_, cfg%kmax_
+      do j = cfg%jmin_, cfg%jmax_
+        do i = cfg%imin_, cfg%imax_
+          call  houssem2d_backeuler(eqPp, gvec, taup, fs%params(:,i,j,k), dt, &
+            fs%Uc(:,i,j,k), fs%dU(:,i,j,k))
+        end do
+      end do
+    end do
+
+  end subroutine backeulersrc
+
+  subroutine halfhalfsrc(dt)
+    implicit none
+    real(WP), intent(in) :: dt
+    integer :: i, j, k
+
+    do k = cfg%kmin_, cfg%kmax_
+      do j = cfg%jmin_, cfg%jmax_
+        do i = cfg%imin_, cfg%imax_
+          call houssem2d_rhs(eqPp, gvec, taup, fs%params(:,i,j,k),            &
+            fs%Uc(:,i,j,k), src_rhs(:,i,j,k))
+        end do
+      end do
+    end do
+
+    src_rhs = src_rhs * (0.5 * time%dt)
+    src_mid = fs%Uc + src_rhs
+
+    do k = cfg%kmin_, cfg%kmax_
+      do j = cfg%jmin_, cfg%jmax_
+        do i = cfg%imin_, cfg%imax_
+          call  houssem2d_backeuler(eqPp, gvec, taup, fs%params(:,i,j,k),     &
+            0.5_WP * dt, src_mid(:,i,j,k), fs%dU(:,i,j,k))
+        end do
+      end do
+    end do
+
+    fs%dU = fs%dU + src_rhs
+
+  end subroutine halfhalfsrc(dt)
 
   !> update phys
   subroutine update_p_vel()
@@ -121,7 +171,18 @@ contains
 
     call cfg%sync(p_vel)
 
-  end subroutine
+  end subroutine update_p_vel
+
+  !> update debug
+  subroutine update_debug()
+    implicit none
+
+    csquared(:,:,:) = fs%Uc(4,:,:,:) - fs%Uc(2,:,:,:)**2 / fs%Uc(1,:,:,:)
+    csquared(:,:,:) = csquared(:,:,:) / fs%Uc(1,:,:,:)
+
+    call cfg%sync(csquared)
+
+  end subroutine update_debug
 
   !> initialization of problem solver
   subroutine simulation_init()
@@ -142,6 +203,7 @@ contains
 
     ! create a single-phase flow solver
     create_and_initialize_flow_solver: block
+      real(WP) :: eqPpii
 
       ! call constructor
       fs = make_houssem2d_muscl(cfg)
@@ -160,6 +222,8 @@ contains
       call param_read('Gravity', gvec(1))
       gvec(2) = 0.0_WP
       call param_read('Particle relax time', taup)
+      call param_read('Equilibrium particle pressure', eqPpii)
+      eqPp(:) = (/ eqPpii, 0.0_WP, eqPpii /)
 
     end block create_and_initialize_flow_solver
 
@@ -189,13 +253,17 @@ contains
     ! Add Ensight output
     create_ensight: block
       use string, only: str_short
-      real(WP), dimension(:,:,:), pointer :: scl_ptr_1, scl_ptr_2, scl_ptr_3
+      real(WP), dimension(:,:,:), pointer :: scl_ptr_1, scl_ptr_2
 
       ! create array to hold particle velocities
       allocate(p_vel(2,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,           &
         & cfg%kmino_:cfg%kmaxo_))
       allocate(scl_zeros(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,         &
         cfg%kmino_:cfg%kmaxo_))
+
+      ! create debug value arrays
+      allocate(csquared(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,          &
+        & cfg%kmino_:cfg%kmaxo_))
 
       ! Create Ensight output from cfg
       ens_out = ensight(cfg=cfg, name='houssem2dtg')
@@ -214,11 +282,13 @@ contains
       scl_ptr_2 => fs%params(2,:,:,:)
       call ens_out%add_vector('fl_vel', scl_ptr_1, scl_ptr_2, scl_zeros)
       scl_ptr_1 => fs%Uc(4,:,:,:)
-      call ens_out%add_scalar('e11', scl_ptr_1)
+      call ens_out%add_scalar('E11', scl_ptr_1)
       scl_ptr_1 => fs%Uc(5,:,:,:)
-      call ens_out%add_scalar('e12', scl_ptr_1)
+      call ens_out%add_scalar('E12', scl_ptr_1)
       scl_ptr_1 => fs%Uc(6,:,:,:)
-      call ens_out%add_scalar('e22', scl_ptr_1)
+      call ens_out%add_scalar('E22', scl_ptr_1)
+      scl_ptr_1 => csquared(:,:,:)
+      call ens_out%add_scalar('c2', scl_ptr_1)
 
       ! Output to ensight
       if (ens_evt%occurs()) then
@@ -229,7 +299,6 @@ contains
 
     ! Create a monitor file
     create_monitor: block
-      use monitor_class, only: add_column_real
       use string, only: str_short
       real(WP), pointer :: real_ptr
 
@@ -243,31 +312,37 @@ contains
       call mfile%add_column(time%t, 'Time')
       call mfile%add_column(time%dt, 'Timestep size')
       call mfile%add_column(time%cfl, 'Maximum CFL')
-      real_ptr => fs%Umin(1)
-      call add_column_real(mfile, real_ptr, 'pt_density_min')
-      real_ptr => fs%Umax(1)
-      call add_column_real(mfile, real_ptr, 'pt_density_max')
-      real_ptr => fs%Umin(2)
-      call add_column_real(mfile, real_ptr, 'pt_momx_min')
-      real_ptr => fs%Umax(2)
-      call add_column_real(mfile, real_ptr, 'pt_momx_max')
-      real_ptr => fs%Umin(3)
-      call add_column_real(mfile, real_ptr, 'pt_momx_min')
-      real_ptr => fs%Umax(3)
-      call add_column_real(mfile, real_ptr, 'pt_momx_max')
-      real_ptr => fs%Umin(4)
-      call add_column_real(mfile, real_ptr, 'e11_min')
-      real_ptr => fs%Umax(4)
-      call add_column_real(mfile, real_ptr, 'e11_max')
-      real_ptr => fs%Umin(5)
-      call add_column_real(mfile, real_ptr, 'e12_min')
-      real_ptr => fs%Umax(5)
-      call add_column_real(mfile, real_ptr, 'e12_max')
-      real_ptr => fs%Umin(6)
-      call add_column_real(mfile, real_ptr, 'e22_min')
-      real_ptr => fs%Umax(6)
-      call add_column_real(mfile, real_ptr, 'e22_max')
       call mfile%write()
+
+      ! Create range monitor
+      rangefile = monitor(fs%cfg%amRoot, 'range')
+      call rangefile%add_column(time%n, 'Timestep number')
+      call rangefile%add_column(time%t, 'Time')
+      real_ptr => fs%Umin(1)
+      call rangefile%add_column(real_ptr, 'pt_density_min')
+      real_ptr => fs%Umax(1)
+      call rangefile%add_column(real_ptr, 'pt_density_max')
+      real_ptr => fs%Umin(2)
+      call rangefile%add_column(real_ptr, 'pt_momx_min')
+      real_ptr => fs%Umax(2)
+      call rangefile%add_column(real_ptr, 'pt_momx_max')
+      real_ptr => fs%Umin(3)
+      call rangefile%add_column(real_ptr, 'pt_momx_min')
+      real_ptr => fs%Umax(3)
+      call rangefile%add_column(real_ptr, 'pt_momx_max')
+      real_ptr => fs%Umin(4)
+      call rangefile%add_column(real_ptr, 'e11_min')
+      real_ptr => fs%Umax(4)
+      call rangefile%add_column(real_ptr, 'e11_max')
+      real_ptr => fs%Umin(5)
+      call rangefile%add_column(real_ptr, 'e12_min')
+      real_ptr => fs%Umax(5)
+      call rangefile%add_column(real_ptr, 'e12_max')
+      real_ptr => fs%Umin(6)
+      call rangefile%add_column(real_ptr, 'e22_min')
+      real_ptr => fs%Umax(6)
+      call rangefile%add_column(real_ptr, 'e22_max')
+      call rangefile%write()
 
       ! Create CFL monitor
       cflfile = monitor(fs%cfg%amRoot, 'cfl')
@@ -283,17 +358,17 @@ contains
       call consfile%add_column(time%n, 'Timestep number')
       call consfile%add_column(time%t, 'Time')
       real_ptr => fs%Uint(1)
-      call add_column_real(consfile, real_ptr, 'pt_density_int')
+      call consfile%add_column(real_ptr, 'pt_density_int')
       real_ptr => fs%Uint(2)
-      call add_column_real(consfile, real_ptr, 'pt_momx_int')
+      call consfile%add_column(real_ptr, 'pt_momx_int')
       real_ptr => fs%Uint(3)
-      call add_column_real(consfile, real_ptr, 'pt_momy_int')
+      call consfile%add_column(real_ptr, 'pt_momy_int')
       real_ptr => fs%Uint(4)
-      call add_column_real(consfile, real_ptr, 'e11_int')
+      call consfile%add_column(real_ptr, 'e11_int')
       real_ptr => fs%Uint(5)
-      call add_column_real(consfile, real_ptr, 'e12_int')
+      call consfile%add_column(real_ptr, 'e12_int')
       real_ptr => fs%Uint(6)
-      call add_column_real(consfile, real_ptr, 'e22_int')
+      call consfile%add_column(real_ptr, 'e22_int')
       call consfile%write()
 
     end block create_monitor
@@ -309,33 +384,57 @@ contains
 
       ! Increment time
       call fs%get_cfl(time%dt, time%cfl)
+      time%cfl = max(time%cfl, 0.5_WP / (time%cflmax * taup) * time%dt)
       call time%adjust_dt()
       call time%increment()
 
-      ! take step (Strang)
+      ! update vortex
       call update_tg(time%t)
+
+      ! take step (Strang)
       fs%dU(:,:,:,:) = 0.0_WP
-      call eulersrc()
+      call fs%compute_dU_x(0.5_WP * time%dt)
+      fs%Uc = fs%Uc + fs%dU
+      fs%dU(:,:,:,:) = 0.0_WP
+      call fs%compute_dU_y(0.5_WP * time%dt)
+      fs%Uc = fs%Uc + fs%dU
+      fs%dU(:,:,:,:) = 0.0_WP
+      call backeulersrc(time%dt)
+      fs%Uc = fs%Uc + fs%dU
+      fs%dU(:,:,:,:) = 0.0_WP
+      call fs%compute_dU_y(0.5_WP * time%dt)
       fs%Uc = fs%Uc + fs%dU
       fs%dU(:,:,:,:) = 0.0_WP
       call fs%compute_dU_x(0.5_WP * time%dt)
       fs%Uc = fs%Uc + fs%dU
-      fs%dU(:,:,:,:) = 0.0_WP
-      call fs%compute_dU_y(time%dt)
-      fs%Uc = fs%Uc + fs%dU
-      fs%dU(:,:,:,:) = 0.0_WP
-      call fs%compute_dU_x(0.5_WP * time%dt)
-      fs%Uc = fs%Uc + fs%dU
+
+      ! take step (Lie backward source, unsplit space)
+      !fs%dU(:,:,:,:) = 0.0_WP
+      !call backeulersrc(time%dt)
+      !fs%Uc = fs%Uc + fs%dU
+      !fs%dU(:,:,:,:) = 0.0_WP
+      !call fs%compute_dU_x(time%dt)
+      !call fs%compute_dU_y(time%dt)
+      !fs%Uc = fs%Uc + fs%dU
+
+      ! take step (unsplit)
+      !fs%dU(:,:,:,:) = 0.0_WP
+      !call backeulersrc(time%dt)
+      !call fs%compute_dU_x(time%dt)
+      !call fs%compute_dU_y(time%dt)
+      !fs%Uc = fs%Uc + fs%dU
 
       ! Output to ensight
       if (ens_evt%occurs()) then
         call update_p_vel()
+        call update_debug()
         call ens_out%write_data(time%t)
       end if
 
       ! Perform and output monitoring
       call fs%get_range()
       call mfile%write()
+      call rangefile%write()
       call cflfile%write()
       call consfile%write()
 

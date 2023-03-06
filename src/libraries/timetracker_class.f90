@@ -3,17 +3,17 @@ module timetracker_class
    use string,    only: str_medium,str_long
    implicit none
    private
-   
+
    ! Expose type/constructor/methods
    public :: timetracker
-   
-   
+
+
    !> Smoothing parameter for dt selection
    real(WP), parameter :: alpha = 0.7_WP
    !> Give ourselves 10 minutes to clean up
    real(WP), parameter :: wtsafe= 600.0_WP
-   
-   
+
+
    !> Timetracker object
    type :: timetracker
       logical :: amRoot                                !< Timetracker needs to know who's the boss
@@ -32,17 +32,17 @@ module timetracker_class
       procedure :: print=>timetracker_print            !< Output timetracker info to screen
       procedure :: log  =>timetracker_log              !< Output timetracker info to log
    end type timetracker
-   
-   
+
+
    !> Declare timetracker constructor
    interface timetracker
       procedure constructor
    end interface timetracker
-   
-   
+
+
 contains
-   
-   
+
+
    !> Constructor for timetracker object
    function constructor(amRoot,name) result(self)
       implicit none
@@ -62,8 +62,8 @@ contains
       self%dtmid=0.0_WP
       self%it=1; self%itmax=1
    end function constructor
-   
-   
+
+
    !> Time increment
    subroutine increment(this)
       use param,    only: verbose
@@ -82,8 +82,8 @@ contains
       if (verbose.gt.0) call this%log
       if (verbose.gt.1) call this%print
    end subroutine increment
-   
-   
+
+
    !> Adjust dt based on CFL
    subroutine adjust_dt(this)
       implicit none
@@ -95,8 +95,8 @@ contains
       ! Prevent dt from increasing too fast
       if (this%dt.gt.this%dtold) this%dt=alpha*this%dt+(1.0_WP-alpha)*this%dtold
    end subroutine adjust_dt
-   
-   
+
+
    !> Termination check
    logical function done(this)
       use messager, only: log
@@ -120,8 +120,8 @@ contains
          write(message,'(" Timetracker [",a,"] reached maximum wallclock time allowed ")') trim(this%name); call log(message)
       end if
    end function done
-   
-   
+
+
    !> Log timetracker info
    subroutine timetracker_log(this)
       use string,   only: str_long
@@ -139,8 +139,8 @@ contains
          write(message,'(" >  wt/ wtmax = ",es12.5,"/",es12.5)') this%wt,this%wtmax; call log(message)
       end if
    end subroutine timetracker_log
-   
-   
+
+
    !> Print out timetracker info
    subroutine timetracker_print(this)
       use, intrinsic :: iso_fortran_env, only: output_unit
@@ -156,6 +156,6 @@ contains
          write(output_unit,'(" >  wt/ wtmax = ",es12.5,"/",es12.5)') this%wt,this%wtmax
       end if
    end subroutine timetracker_print
-   
-   
+
+
 end module timetracker_class

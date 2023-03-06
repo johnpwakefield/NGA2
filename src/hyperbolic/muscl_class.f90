@@ -1,6 +1,5 @@
 !>  MUSCL-type solver class
-!>  Provides support for various BC, generic hyperbolic structures, and source
-!>  terms projected onto eigenstructures
+!>  Provides support for various BC, generic hyperbolic structures
 !>
 !>  Originally written by John P Wakefield, December 2022
 !>
@@ -58,7 +57,7 @@ module muscl_class
   ! rs(:, 1)       left-going eigenvalues
   ! rs(:, 2)       right-going eigenvalues
   ! rs(:, 3)       wave strengths
-  ! rs(:, 4)       (projected) source strengths
+  ! rs(:, 4)       (projected) source strengths TODO remove these
   ! rs(:, 5:(N+4)) (linearized) eigenvectors
 
   interface
@@ -789,45 +788,12 @@ contains
 
     ! waves from left
     tmp1 = lc_rs(:, 2) * lc_rs(:, 3)
-    !l_dxbeta : block
-    !  integer :: j
-    !  tmp2 = lc_rs(:, 1) + lc_rs(:, 2)
-    !  ! this probably isn't necessary for anything physical
-    !  do j = 1, N
-    !    if (tmp2(j) .eq. 0.0_WP) then
-    !      tmp2(j) = 0.5_WP
-    !    else if (tmp2(j) .gt. 0.0_WP) then
-    !      tmp2(j) = 1.0_WP
-    !    else
-    !      tmp2(j) = 0.0_WP
-    !    end if
-    !  end do
-    !  tmp2 = tmp2 * lc_rs(:, 4)
-    !  tmp2 = dx * tmp2
-    !end block l_dxbeta
-    !tmp1 = tmp1 - tmp2
     tmp2 = matmul(lc_rs(:, 5:(N+4)), tmp1)
     tmp2 = k / dx * tmp2
     dU = dU - tmp2
 
     ! waves from right
     tmp1 = rc_rs(:, 1) * rc_rs(:, 3)
-    !r_dxbeta : block
-    !  integer :: j
-    !  tmp2 = rc_rs(:, 1) + rc_rs(:, 2)
-    !  do j = 1, N
-    !    if (tmp2(j) .eq. 0.0_WP) then
-    !      tmp2(j) = 0.5_WP
-    !    else if (tmp2(j) .lt. 0.0_WP) then
-    !      tmp2(j) = 1.0_WP
-    !    else
-    !      tmp2(j) = 0.0_WP
-    !    end if
-    !  end do
-    !  tmp2 = tmp2 * rc_rs(:, 4)
-    !  tmp2 = dx * tmp2
-    !end block r_dxbeta
-    !tmp1 = tmp1 - tmp2
     tmp2 = matmul(rc_rs(:, 5:(N+4)), tmp1)
     tmp2 = k / dx * tmp2
     dU = dU - tmp2

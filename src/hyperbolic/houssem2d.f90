@@ -12,8 +12,6 @@ module hyperbolic_houssem2d
     & limiter_ftype
   implicit none
 
-  real(WP), parameter :: RT3 = sqrt(3.0_WP)
-
   real(WP), parameter :: CFL_SAFETY = 0.92_WP
   real(WP), parameter :: DIVZERO_EPS = 1e-9_WP
   character(len=str_medium), parameter :: houssem2d_muscl_name =              &
@@ -60,8 +58,9 @@ contains
   end function make_houssem2d_muscl
 
   !> source terms
-  pure subroutine houssem2d_rhs(gvec, taup, fl_vel, U, rhs)
+  pure subroutine houssem2d_rhs(eqPp, gvec, taup, fl_vel, U, rhs)
     implicit none
+    real(WP), dimension(3), intent(in) :: eqPp
     real(WP), intent(in) :: taup
     real(WP), dimension(2), intent(in) :: gvec, fl_vel
     real(WP), dimension(6), intent(in) :: U
@@ -72,47 +71,51 @@ contains
 
     rhs(1) = 0.0_WP
 
-    rhs(2:3) = U(1) * gvec
-    rhs(2:3) = rhs(2:3) + U(1) / taup * (fl_vel - pt_vel)
+    rhs(2:3) = U(1) * gvec + U(1) / taup * (fl_vel - pt_vel)
 
-    rhs(4) = 2 * pt_vel(1) * gvec(1)
-    rhs(4) = rhs(4) + 2 * (pt_vel(1) * fl_vel(1) - U(4) / U(1)) / taup
-    rhs(4) = rhs(4) * U(1)
+    rhs(4) = pt_vel(1) * gvec(1) + (pt_vel(1) * fl_vel(1) - U(4) / U(1)) / taup
+    rhs(4) = 2 * U(1) * rhs(4)
 
     rhs(5) = gvec(1) * pt_vel(2) + gvec(2) * pt_vel(1)
     rhs(5) = rhs(5) + (pt_vel(1) * fl_vel(2) + pt_vel(2) * fl_vel(1) -        &
       & 2 * U(5) / U(1)) / taup
-    rhs(5) = rhs(5) * U(1)
+    rhs(5) = U(1) * rhs(5)
 
-    rhs(6) = 2 * gvec(2) * pt_vel(2)
-    rhs(6) = rhs(6) + 2 * (pt_vel(2) * fl_vel(2) - U(6) / U(1)) / taup
-    rhs(6) = rhs(6) * U(1)
+    rhs(6) = gvec(2) * pt_vel(2) + (pt_vel(2) * fl_vel(2) - U(6) / U(1)) / taup
+    rhs(6) = 2 * U(1) * rhs(6)
+
+    rhs(4:6) = rhs(4:6) + (2 * U(1) / taup) * eqPp
 
   end subroutine houssem2d_rhs
 
-  !pure subroutine houssem2d_rhs_backward(gvec, taup, fl_vel, U, dt, rhs)
-  !  implicit none
-  !  real(WP), intent(in) :: taup, dt
-  !  real(WP), dimension(2), intent(in) :: gvec, fl_vel
-  !  real(WP), dimension(6), intent(in) :: U
-  !  real(WP), dimension(6), intent(out) :: rhs
-  !  real(WP), dimension(2) :: pt_vel
-  !  real(WP) :: a, b
+  pure subroutine houssem2d_backeuler(eqPp, gvec, taup, fl_vel, dt, U, dU)
+    implicit none
+    real(WP), dimension(3), intent(in) :: eqPp
+    real(WP), intent(in) :: taup, dt
+    real(WP), dimension(2), intent(in) :: gvec, fl_vel
+    real(WP), dimension(6), intent(in) :: U
+    real(WP), dimension(6), intent(out) :: dU
+    real(WP) :: a, b
+    real(WP), dimension(5) :: c
 
-  !  a = 1.0_WP / taup + 1.0_WP / dt
-  !  b = 1.0_WP / (1.0_WP + taup / dt)
+    a = 1.0_WP / (dt / taup + 1.0_WP)
+    b = 1.0_WP / (2 * dt**2 + 3 * dt * taup + taup**2)
 
-  !  pt_vel(:) = U(2:3) / U(1)
+    c(1:2) = U(1) * fl_vel(1:2)
+    c(3:5) = U(1) * eqPp
+    c(:) = (dt / taup) * c(:)
+    c(:) = c(:) + U(2:6)
 
-  !  rhs(1) = 0.0_WP
+    dU(1) = U(1)
+    dU(2:3) = a * c(1:2)
+    dU(4) = 2 * dt * taup * fl_vel(1) * b * c(1)
+    dU(5) = dt * taup * b * (fl_vel(2) * c(1) + fl_vel(1) * c(2))
+    dU(6) = 2 * dt * taup * fl_vel(2) * b * c(2)
+    dU(4:6) = dU(4:6) + taup / (2 * dt + taup) * c(3:5)
 
-  !  rhs(2:3) = U(1) * (a * fl_vel - b * pt_vel)
-  !  rhs(2:3) = rhs(2:3) + U(1) * gvec
+    dU(:) = dU(:) - U(:)
 
-  !  rhs(4) = 
-
-
-  !end subroutine houssem2d_rhs
+  end subroutine houssem2d_backeuler
 
   pure subroutine houssem2d_evals_x(N, params, U, evals)
     implicit none
@@ -133,7 +136,9 @@ contains
     real(WP), dimension(N), intent(out) :: evals
     real(WP), dimension(6) :: u_permute
 
-    u_permute(:) = u(:); u_permute(2) = u(3); u_permute(3) = u(2);
+    u_permute(:) = u(:)
+    u_permute(2) = u(3); u_permute(3) = u(2);
+    u_permute(4) = u(6); u_permute(6) = u(4);
 
     call houssem2d_evals_1d(u_permute, evals)
 
@@ -147,7 +152,7 @@ contains
     real(WP), dimension(N), intent(out) :: evals
     real(WP), dimension(N) :: u_permute
 
-    ! do nothing
+    evals(:) = 0.0_WP
 
   end subroutine houssem2d_evals_z
 
@@ -158,6 +163,7 @@ contains
     real(WP), dimension(6), intent(out) :: Ua
     real(WP) :: wl, wr, v1, v2, v1l, v1r, v2l, v2r
     real(WP) :: e11l, e11r, e12l, e12r, e22l, e22r
+    real(WP), parameter :: TT = 2.0_WP / 3.0_WP
 
     v1l = Ul(2) / Ul(1); v1r = Ur(2) / Ur(1);
     v2l = Ul(3) / Ul(1); v2r = Ur(3) / Ur(1);
@@ -172,11 +178,14 @@ contains
 
     Ua(2) = v1 * Ua(1); Ua(3) = v2 * Ua(1);
 
-    Ua(4) = (3*e11l*Ua(1) + 3*e11l*Ul(1) + 3*e11r*Ua(1) + 3*e11r*Ur(1) - 2*Ua(1)*v1l**2 + 4*Ua(1)*v1l*v1r - 2*Ua(1)*v1r**2) / (3*(2*Ua(1) + Ul(1) + Ur(1)))
-    Ua(5) = (3*e12l*Ua(1) + 3*e12l*Ul(1) + 3*e12r*Ua(1) + 3*e12r*Ur(1) - 2*Ua(1)*v1l*v2l + 2*Ua(1)*v1l*v2r + 2*Ua(1)*v1r*v2l - 2*Ua(1)*v1r*v2r) / (3*(2*Ua(1) + Ul(1) + Ur(1)))
-    Ua(6) = (3*e22l*Ua(1) + 3*e22l*Ul(1) + 3*e22r*Ua(1) + 3*e22r*Ur(1) - 2*Ua(1)*v2l**2 + 4*Ua(1)*v2l*v2r - 2*Ua(1)*v2r**2) / (3*(2*Ua(1) + Ul(1) + Ur(1)))
+    Ua(4) = (e11l*(Ua(1) + Ul(1)) + e11r*(Ua(1) + Ur(1)) - TT*Ua(1)*(v1l -    &
+      v1r)**2)
+    Ua(5) = (e12l*(Ua(1) + Ul(1)) + e12r*(Ua(1) + Ur(1)) + TT*Ua(1)*(-v1l*v2l &
+      + v1l*v2r + v1r*v2l - v1r*v2r))
+    Ua(6) = (e22l*(Ua(1) + Ul(1)) + e22r*(Ua(1) + Ur(1)) - TT*Ua(1)*(v2l -    &
+      v2r)**2)
 
-    Ua(4:6) = Ua(1) * Ua(4:6)
+    Ua(4:6) = Ua(1) / (2*Ua(1) + Ul(1) + Ur(1)) * Ua(4:6)
 
   end subroutine houssem2d_roeavg
 
@@ -186,6 +195,7 @@ contains
     real(WP), dimension(6), intent(in) :: U
     real(WP), dimension(6), intent(out) :: lambda
     real(WP) :: c, v1
+    real(WP), parameter :: RT3 = sqrt(3.0_WP)
 
     v1 = U(2) / U(1); c = sqrt(U(4) / U(1) - v1**2);
 
@@ -229,7 +239,7 @@ contains
     real(WP), dimension(N) :: Uln, Urn
     real(WP), dimension(6) :: rs_row
 
-    ! do nothing
+    rs(:,:) = 0.0_WP
 
   end subroutine houssem2d_rsolv_z
 
@@ -240,17 +250,18 @@ contains
     real(WP), dimension(6), intent(in) :: Ul, Ur
     real(WP), dimension(6,10), intent(out) :: rs
     real(WP), dimension(6) :: Ua, a, b
-    real(WP) :: v1, v2, c, k, koc, cok
+    real(WP) :: v1, v2, c, k, koc, cok, e11, e12, e22
     real(WP) :: drhopn, drhopnv1, drhopnv2, de11, de12, de22
+    real(WP), parameter :: RT3 = sqrt(3.0_WP)
+    real(WP), parameter :: EPS = 1e-8_WP
 
     ! Roe averages
     call houssem2d_roeavg(Ul, Ur, Ua)
     v1 = Ua(2) / Ua(1); v2 = Ua(3) / Ua(1);
 
     ! c and k
-    !TODO decide whether to keep epsilon
-    c = sqrt(Ua(4) / Ua(1) - v1**2 + 1e-13_WP)
-    k = sqrt(Ua(5) / Ua(1) - v1 * v2 + 1e-13_WP)
+    c = sqrt(Ua(4) / Ua(1) - v1**2 + EPS)
+    k = Ua(5) / Ua(1) - v1 * v2
     koc = k / c; cok = c / k;
 
     ! eigenvalues
@@ -261,16 +272,18 @@ contains
     ! αs
     drhopn = Ur(1) - Ul(1);
     drhopnv1 = Ur(2) - Ul(2); drhopnv2 = Ur(3) - Ul(3);
-    de11 = Ur(4) - Ul(4); de12 = Ur(5) - Ul(5); de22 = Ur(6) - Ul(6);
-    rs(1,3) = k**2*(-RT3*c**3*drhopn*Ua(6)*v1 + RT3*c**3*drhopnv1*Ua(6) - c**2*de11*Ua(6) - c**2*drhopn*Ua(6)*v1**2 + 6*c**2*drhopn*k*v1*v2 + 2*c**2*drhopnv1*Ua(6)*v1 - 6*c**2*drhopnv1*k*v2 + 2*RT3*c*de11*k*v2 - 2*RT3*c*drhopn*k**2*v1 + 2*RT3*c*drhopn*k*v1**2*v2 + 2*RT3*c*drhopnv1*k**2 - 4*RT3*c*drhopnv1*k*v1*v2 - 2*de11*k**2 - 2*drhopn*k**2*v1**2 + 4*drhopnv1*k**2*v1) / (6*c**2*(-c**4*Ua(6)**2 - 4*c**2*Ua(6)*k**2 + 12*c**2*k**2*v2**2 - 4*k**4))
-    rs(2,3) =  (-c**3*drhopn*v2 + c**3*drhopnv2 - c**2*de12 - c**2*drhopn*v1*v2 + c**2*drhopnv1*v2 + c**2*drhopnv2*v1 + c*drhopn*k*v1 - c*drhopnv1*k + de11*k + drhopn*k*v1**2 - 2*drhopnv1*k*v1) / (2*c**4)
+    e11 = Ua(4) / Ua(1); e12 = Ua(5) / Ua(1); e22 = Ua(6) / Ua(1);
+    de11 = Ur(4) / Ur(1) - Ul(4) / Ul(1)
+    de12 = Ur(5) / Ur(1) - Ul(5) / Ul(1)
+    de22 = Ur(6) / Ur(1) - Ul(6) / Ul(1)
+    rs(1,3) = k**2*(-RT3*c**3*drhopn*e22*v1 + RT3*c**3*drhopnv1*e22 - c**2*de11*e22 - c**2*drhopn*e22*v1**2 + 6*c**2*drhopn*k*v1*v2 + 2*c**2*drhopnv1*e22*v1 - 6*c**2*drhopnv1*k*v2 + 2*RT3*c*de11*k*v2 - 2*RT3*c*drhopn*k**2*v1 + 2*RT3*c*drhopn*k*v1**2*v2 + 2*RT3*c*drhopnv1*k**2 - 4*RT3*c*drhopnv1*k*v1*v2 - 2*de11*k**2 - 2*drhopn*k**2*v1**2 + 4*drhopnv1*k**2*v1)/(6*c**2*(-c**4*e22**2 - 4*c**2*e22*k**2 + 12*c**2*k**2*v2**2 - 4*k**4))
+    rs(2,3) = (-c**3*drhopn*v2 + c**3*drhopnv2 - c**2*de12 - c**2*drhopn*v1*v2 + c**2*drhopnv1*v2 + c**2*drhopnv2*v1 + c*drhopn*k*v1 - c*drhopnv1*k + de11*k + drhopn*k*v1**2 - 2*drhopnv1*k*v1)/(2*c**4)
     rs(3,3) = (3*c**2*drhopn - de11 - drhopn*v1**2 + 2*drhopnv1*v1)/(3*c**2)
-    rs(4,3) = (3*c**4*de22 + 6*c**4*drhopn*v2**2 - 6*c**4*drhopnv2*v2 - c**2*de11*Ua(6) - 6*c**2*de12*k - c**2*drhopn*Ua(6)*v1**2 - 6*c**2*drhopn*k*v1*v2 + 2*c**2*drhopnv1*Ua(6)*v1 + 6*c**2*drhopnv1*k*v2 + 6*c**2*drhopnv2*k*v1 + 4*de11*k**2 + 4*drhopn*k**2*v1**2 - 8*drhopnv1*k**2*v1) / (3*c**4*v1**2+DIVZERO_EPS)
-    rs(5,3) = (-c**3*drhopn*v2 + c**3*drhopnv2 + c**2*de12 + c**2*drhopn*v1*v2 - c**2*drhopnv1*v2 - c**2*drhopnv2*v1 + c*drhopn*k*v1 - c*drhopnv1*k - de11*k - drhopn*k*v1**2 + 2*drhopnv1*k*v1) / (2*c**4)
-    rs(6,3) = k**2*(RT3*c**3*drhopn*Ua(6)*v1 - RT3*c**3*drhopnv1*Ua(6) - c**2*de11*Ua(6) - c**2*drhopn*Ua(6)*v1**2 + 6*c**2*drhopn*k*v1*v2 + 2*c**2*drhopnv1*Ua(6)*v1 - 6*c**2*drhopnv1*k*v2 - 2*RT3*c*de11*k*v2 + 2*RT3*c*drhopn*k**2*v1 - 2*RT3*c*drhopn*k*v1**2*v2 - 2*RT3*c*drhopnv1*k**2 + 4*RT3*c*drhopnv1*k*v1*v2 - 2*de11*k**2 - 2*drhopn*k**2*v1**2 + 4*drhopnv1*k**2*v1) / (6*c**2*(-c**4*Ua(6)**2 - 4*c**2*Ua(6)*k**2 + 12*c**2*k**2*v2**2 - 4*k**4))
+    rs(4,3) = (3*c**4*de22 + 6*c**4*drhopn*v2**2 - 6*c**4*drhopnv2*v2 - c**2*de11*e22 - 6*c**2*de12*k - c**2*drhopn*e22*v1**2 - 6*c**2*drhopn*k*v1*v2 + 2*c**2*drhopnv1*e22*v1 + 6*c**2*drhopnv1*k*v2 + 6*c**2*drhopnv2*k*v1 + 4*de11*k**2 + 4*drhopn*k**2*v1**2 - 8*drhopnv1*k**2*v1)/(3*c**4*v1**2)
+    rs(5,3) = (-c**3*drhopn*v2 + c**3*drhopnv2 + c**2*de12 + c**2*drhopn*v1*v2 - c**2*drhopnv1*v2 - c**2*drhopnv2*v1 + c*drhopn*k*v1 - c*drhopnv1*k - de11*k - drhopn*k*v1**2 + 2*drhopnv1*k*v1)/(2*c**4)
+    rs(6,3) = k**2*(RT3*c**3*drhopn*e22*v1 - RT3*c**3*drhopnv1*e22 - c**2*de11*e22 - c**2*drhopn*e22*v1**2 + 6*c**2*drhopn*k*v1*v2 + 2*c**2*drhopnv1*e22*v1 - 6*c**2*drhopnv1*k*v2 - 2*RT3*c*de11*k*v2 + 2*RT3*c*drhopn*k**2*v1 - 2*RT3*c*drhopn*k*v1**2*v2 - 2*RT3*c*drhopnv1*k**2 + 4*RT3*c*drhopnv1*k*v1*v2 - 2*de11*k**2 - 2*drhopn*k**2*v1**2 + 4*drhopnv1*k**2*v1)/(6*c**2*(-c**4*e22**2 - 4*c**2*e22*k**2 + 12*c**2*k**2*v2**2 - 4*k**4))
 
     ! βs
-    !TODO source terms
     rs(:,4) = 0.0_WP
 
     ! eigenvectors
@@ -278,31 +291,20 @@ contains
     rs(:,7) = (/ 1.0_WP, v1, v2, v1**2, v1*v2, 0.0_WP /)
     rs(:,8) = (/ 0.0_WP, 0.0_WP, 0.0_WP, 0.0_WP, 0.0_WP, v1**2 /)
     rs(:,9) = (/ 0.0_WP, 0.0_WP, c, 0.0_WP, c*(c + v1), 2*(c*v2 + k) /)
-    rs(1,5) = cok**2*Ua(6) + 2*RT3*cok*v2 + 2.0_WP
-    rs(2,5) = -RT3*c*cok**2*Ua(6) + cok**2*Ua(6)*v1 - 6*c*cok*v2 - 2*RT3*c +  &
-      & 2*RT3*cok*v1*v2 + 2*v1
-    rs(3,5) = cok**2*Ua(6)*v2 - RT3*cok*Ua(6) + 2*RT3*cok*v2**2 - 4*v2 -      &
-      & 2*RT3*koc
-    rs(4,5) = 3*c**2*cok**2*Ua(6) - 2*RT3*c*cok**2*Ua(6)*v1 +                 &
-      & 6*RT3*c**2*cok*v2 + cok**2*Ua(6)*v1**2 + 6*c**2 - 12*c*cok*v1*v2 -    &
-      & 4*RT3*c*v1 + 2*RT3*cok*v1**2*v2 + 2*v1**2
-    rs(5,5) = -RT3*c*cok**2*Ua(6)*v2 + 3*c*cok*Ua(6) + cok**2*Ua(6)*v1*v2 -   &
-      & 6*c*cok*v2**2 - RT3*cok*Ua(6)*v1 + 4*RT3*c*v2 + 2*RT3*cok*v1*v2**2 +  &
-      & 6*k - 4*v1*v2 - 2*RT3*koc*v1
-    a(1) = cok**2*Ua(6) + 2.0_WP
-    a(2) = cok**2*Ua(6)*v1 - 6*c*cok*v2 + 2*v1
-    a(3) = cok**2*Ua(6)*v2 - 4*v2
-    a(4) = cok**2*Ua(6)*(3*c**2 + v1**2) - 12*cok**2*k*v1*v2 + 2*(3*c**2 + v1**2)
-    a(5) = cok**2*Ua(6)*v1*v2 + 3*cok**2*k*(Ua(6) - 2*v2**2) + 6*k - 4*v1*v2
-    a(6) = cok**2*Ua(6)**2 + 4*Ua(6) - 12*v2**2 + 4*koc**2
+    a(1) = cok**2*e22 + 2.0_WP
+    a(2) = cok**2*e22*v1 - 6*c*cok*v2 + 2*v1
+    a(3) = cok**2*e22*v2 - 4*v2
+    a(4) = 3*c**2*cok**2*e22 + cok**2*e22*v1**2 + 6*c**2 - 12*c*cok*v1*v2 + 2*v1**2
+    a(5) = 3*c*cok*e22 + cok**2*e22*v1*v2 - 6*c*cok*v2**2 + 6*k - 4*v1*v2
+    a(6) = cok**2*e22**2 + 4*e22 - 12*v2**2 + 4*koc**2
     b(1) = -2*cok*v2
-    b(2) = cok*(c*cok*Ua(6) + 2*k - 2*v1*v2)
-    b(3) = cok*(Ua(6) - 2*v2**2) + 2*koc
-    b(4) = 2*cok*(c*cok*Ua(6)*v1 + 2*k*v1 - v2*(3*c**2 + v1**2))
-    b(5) = c*cok**2*Ua(6)*v2 - 4*c*v2 + cok*v1*(Ua(6) - 2*v2**2) + 2*koc*v1
+    b(2) = c*(cok**2*e22 + 2.0_WP - 2/k*v1*v2)
+    b(3) = cok*(e22 - 2*v2**2) + 2*koc
+    b(4) = 2*c*(cok**2*e22*v1 - 3*c*cok*v2 + 2*v1 - v1**2*v2/k)
+    b(5) = c*cok**2*e22*v2 + cok*e22*v1 - 4*c*v2 - 2*cok*v1*v2**2 + 2*koc*v1
     b(6) = 0.0_WP
-    rs(:, 5) = a + RT3 * b
-    rs(:,10) = a - RT3 * b
+    rs(:, 5) = a - RT3 * b
+    rs(:,10) = a + RT3 * b
 
   end subroutine houssem2d_rsolv_roe_1d
 

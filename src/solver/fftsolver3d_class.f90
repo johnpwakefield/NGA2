@@ -3,7 +3,7 @@
 !> for 3D periodic uniform computational domains decomposed in at most 2 directions
 !> uses fft3d for Fourier transform
 
-module fftsolver_class
+module fftsolver3d_class
   use precision,    only: WP
   use config_class, only: config
   use fft3d_class,  only: fft3d
@@ -15,11 +15,11 @@ module fftsolver_class
 
 
   ! Expose type/constructor/methods
-  public :: fftsolver
+  public :: fftsolver3d
 
 
   !> fftsolver object definition
-  type, extends(linsol) :: fftsolver
+  type, extends(linsol) :: fftsolver3d
 
     ! FFT object
     class(fft3d), allocatable :: dft
@@ -30,29 +30,29 @@ module fftsolver_class
 
   contains
 
-    procedure :: print_short=>fftsolver_print_short   !< One-line printing of solver status
-    procedure :: print=>fftsolver_print               !< Long-form printing of solver status
-    procedure :: log=>fftsolver_log                   !< Long-form logging of solver status
-    procedure :: init=>fftsolver_init                 !< Grid and stencil initialization - done once for the grid and stencil
-    procedure :: setup=>fftsolver_setup               !< Solver setup (every time the operator changes)
-    procedure :: solve=>fftsolver_solve               !< Execute solver (assumes new RHS and initial guess at every call)
-    procedure :: destroy=>fftsolver_destroy
+    procedure :: print_short=>fftsolver3d_print_short !< One-line printing of solver status
+    procedure :: print=>fftsolver3d_print             !< Long-form printing of solver status
+    procedure :: log=>fftsolver3d_log                 !< Long-form logging of solver status
+    procedure :: init=>fftsolver3d_init               !< Grid and stencil initialization - done once for the grid and stencil
+    procedure :: setup=>fftsolver3d_setup             !< Solver setup (every time the operator changes)
+    procedure :: solve=>fftsolver3d_solve             !< Execute solver (assumes new RHS and initial guess at every call)
+    procedure :: destroy=>fftsolver3d_destroy
 
-  end type fftsolver
+  end type fftsolver3d
 
 
-  !> Declare fftsolver constructor
-  interface fftsolver; procedure fftsolver_from_args; end interface fftsolver;
+  !> Declare fftsolver3d constructor
+  interface fftsolver3d; procedure fftsolver3d_from_args; end interface fftsolver3d;
 
 
 contains
 
 
-  !> Constructor for a fftsolver object
-  function fftsolver_from_args(cfg,name,nst) result(self)
+  !> Constructor for a fftsolver3d object
+  function fftsolver3d_from_args(cfg,name,nst) result(self)
     use messager, only: die
     implicit none
-    type(fftsolver) :: self
+    type(fftsolver3d) :: self
     class(config), target, intent(in) :: cfg
     character(len=*), intent(in) :: name
     integer, intent(in) :: nst
@@ -86,16 +86,16 @@ contains
     ! Setup is not done
     self%setup_done=.false.
 
-  end function fftsolver_from_args
+  end function fftsolver3d_from_args
 
 
   !> Initialize grid and stencil - done at start-up only as long as the stencil or cfg does not change
   !> When calling, zero values of this%opr(1,:,:,:) indicate cells that do not participate in the solver
   !> Only the stencil needs to be defined at this point
-  subroutine fftsolver_init(this)
+  subroutine fftsolver3d_init(this)
     use messager, only: die
     implicit none
-    class(fftsolver), intent(inout) :: this
+    class(fftsolver3d), intent(inout) :: this
     integer :: st,stx1,stx2,sty1,sty2,stz1,stz2
     include 'fftw3.f03'
 
@@ -111,16 +111,16 @@ contains
     ! Initialize DFT
     this%dft=fft3d(this%cfg)
 
-  end subroutine fftsolver_init
+  end subroutine fftsolver3d_init
 
 
   !> Setup solver - done everytime the operator changes
-  subroutine fftsolver_setup(this)
+  subroutine fftsolver3d_setup(this)
     use messager, only: die
     use mpi_f08,  only: MPI_BCAST,MPI_ALLREDUCE,MPI_INTEGER,MPI_SUM
     use parallel, only: MPI_REAL_WP
     implicit none
-    class(fftsolver), intent(inout) :: this
+    class(fftsolver3d), intent(inout) :: this
     real(WP), dimension(1:this%nst) :: ref_opr
     integer :: i,j,k,n,ierr
 
@@ -139,7 +139,7 @@ contains
           end do
         end do
       end do
-      if (.not.circulant) call die('[fftsolver setup] operator must be uniform in space')
+      if (.not.circulant) call die('[fftsolver3d setup] operator must be uniform in space')
     end block checkcirc
 
     ! Build the operator
@@ -168,7 +168,7 @@ contains
     call MPI_ALLREDUCE(i,j,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
     if (j.gt.0) then
       write(*,*) j
-      call die('[fftsolver setup] elements of transformed operator near zero')
+      call die('[fftsolver3d setup] elements of transformed operator near zero')
     end if
 
     ! Divide now instead of later
@@ -177,23 +177,23 @@ contains
     ! Check for division issues
     i=count(isnan(abs(this%factored_operator)))
     call MPI_ALLREDUCE(i,j,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
-    if (j.gt.0) call die('[fftsolver setup] elements of transformed operator are NaN')
+    if (j.gt.0) call die('[fftsolver3d setup] elements of transformed operator are NaN')
 
     ! Set setup-flag to true
     this%setup_done=.true.
 
-  end subroutine fftsolver_setup
+  end subroutine fftsolver3d_setup
 
 
   !> Solve the linear system iteratively
-  subroutine fftsolver_solve(this)
+  subroutine fftsolver3d_solve(this)
     use messager, only: die
     use param,    only: verbose
     implicit none
-    class(fftsolver), intent(inout) :: this
+    class(fftsolver3d), intent(inout) :: this
 
     ! Check that setup was done
-    if (.not.this%setup_done) call die('[fftsolver solve] Solver has not &
+    if (.not.this%setup_done) call die('[fftsolver3d solve] Solver has not &
       &been setup.')
 
     ! Copy to unstrided array
@@ -220,59 +220,59 @@ contains
     if (verbose.gt.0) call this%log
     if (verbose.gt.1) call this%print_short
 
-  end subroutine fftsolver_solve
+  end subroutine fftsolver3d_solve
 
 
-  !> Log fftsolver info
-  subroutine fftsolver_log(this)
+  !> Log fftsolver3d info
+  subroutine fftsolver3d_log(this)
     use string,   only: str_long
     use messager, only: log
     implicit none
-    class(fftsolver), intent(in) :: this
+    class(fftsolver3d), intent(in) :: this
     character(len=str_long) :: message
 
     if (this%cfg%amRoot) then
-      write(message,'("fftsolver solver [",a,"] for config [",a,"]")')    &
+      write(message,'("fftsolver3d solver [",a,"] for config [",a,"]")')    &
         trim(this%name), trim(this%cfg%name)
       call log(message)
     end if
 
-  end subroutine fftsolver_log
+  end subroutine fftsolver3d_log
 
 
-  !> Print fftsolver info to the screen
-  subroutine fftsolver_print(this)
+  !> Print fftsolver3d info to the screen
+  subroutine fftsolver3d_print(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
-    class(fftsolver), intent(in) :: this
+    class(fftsolver3d), intent(in) :: this
 
     if (this%cfg%amRoot) then
-      write(output_unit,'("fftsolver solver [",a,"] for config [",a,"]")') &
+      write(output_unit,'("fftsolver3d solver [",a,"] for config [",a,"]")') &
         trim(this%name), trim(this%cfg%name)
     end if
 
-  end subroutine fftsolver_print
+  end subroutine fftsolver3d_print
 
 
-  !> Short print of fftsolver info to the screen
-  subroutine fftsolver_print_short(this)
+  !> Short print of fftsolver3d info to the screen
+  subroutine fftsolver3d_print_short(this)
     use, intrinsic :: iso_fortran_env, only: output_unit
     implicit none
-    class(fftsolver), intent(in) :: this
+    class(fftsolver3d), intent(in) :: this
 
-    if (this%cfg%amRoot) write(output_unit,'("fftsolver solver [",a16,"] &
+    if (this%cfg%amRoot) write(output_unit,'("fftsolver3d solver [",a16,"] &
       &for config [",a16,"]")') trim(this%name),trim(this%cfg%name)
 
-  end subroutine fftsolver_print_short
+  end subroutine fftsolver3d_print_short
 
-  subroutine fftsolver_destroy(this)
+  subroutine fftsolver3d_destroy(this)
     implicit none
-    class(fftsolver), intent(inout) :: this
+    class(fftsolver3d), intent(inout) :: this
 
     deallocate(this%stc,this%opr,this%rhs,this%sol,this%factored_operator,    &
       this%transformed_rhs,this%stmap)
 
-  end subroutine fftsolver_destroy
+  end subroutine fftsolver3d_destroy
 
-end module fftsolver_class
+end module fftsolver3d_class
 

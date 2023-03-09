@@ -1,0 +1,7 @@
+ifeq ($(USE_FFTW),TRUE)
+  $(@echo "including fft3d")
+  f90EXE_sources += fft3d_class.f90
+endif
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/transform
+VPATH_LOCATIONS   += $(NGA_HOME)/src/transform

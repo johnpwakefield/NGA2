@@ -10,13 +10,13 @@ module simulation
    use incomp_class,  only: incomp
    implicit none
    private
-   
+
    !> Public declarations
    public :: simulation_init,simulation_run,simulation_final
-   
+
    !> Ensight postprocessing
    type(ensight) :: ens1,ens2
-   
+
    !> Give ourselves work arrays
    real(WP), dimension(:,:,:), allocatable :: Uid,Vid,Wid
    real(WP), dimension(:,:,:), allocatable :: Uil,Vil,Wil
@@ -31,12 +31,12 @@ module simulation
    !> Solver declaration
    type(incomp),      public :: fsd
    type(incomp),      public :: fsl
-   
+
    !> Coupler
    type(coupler) :: cpl
-   
+
 contains
-   
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -50,7 +50,7 @@ contains
       allocate(Uid  (cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_))
       allocate(Vid  (cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_))
       allocate(Wid  (cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_))
-      
+
       allocate(Uil  (cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
       allocate(Vil  (cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
       allocate(Wil  (cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
@@ -79,7 +79,7 @@ contains
          dfLES%varname(3)='W'
          dfLES%varname(4)='P'
       end block initlES
-      
+
       ! Both groups prepare the coupler
       if (isInGrp1.or.isInGrp2) then
          ! Create the coupler
@@ -90,10 +90,10 @@ contains
          ! Initialize the metrics
          call cpl%initialize()
       end if
-      
+
       ! Group1 does its initialization work here
       if (isInGrp1) then
-         
+
          ! Group1 also outputs to Ensight
          ens1=ensight(cfg=cfg1,name='DNS')
          call ens1%add_scalar('U',fsd%U)
@@ -101,9 +101,9 @@ contains
          call ens1%add_scalar('W',fsd%W)
          call ens1%add_scalar('P',fsd%P)
          call ens1%write_data(0.0_WP)
-         
+
       end if
-      
+
       ! Group2 allocates the field to receive
       if (isInGrp2) then
          fsl%U=0.0_WP
@@ -111,13 +111,13 @@ contains
          fsl%W=0.0_WP
          fsl%P=0.0_WP
       end if
-      
+
       if (isInGrp2) then
          ens2=ensight(cfg=cfg2,name='LES')
       end if
-      
+
       ! Both groups work on the coupling
-      ! NOTE: Data to be transfered is attached to the coupler object one at a time. 
+      ! NOTE: Data to be transfered is attached to the coupler object one at a time.
       !       Each interpolated variable must then be treated separately unless
       !       the coupler class source code is modified.
 
@@ -145,7 +145,7 @@ contains
          if (isInGrp2) call cpl%pull(fsl%P)
          call ens2%add_scalar('P',fsl%P)
          call dfLES%pushvar(name='P' ,var=fsl%P   )
-          
+
          call dfDNS%pullval(name='dt' ,val=dt   )
          call dfLES%pushval(name='dt' ,val=dt   )
       end block coupling
@@ -157,10 +157,10 @@ contains
 
          call dfLES%write(fdata=trim(adjustl(dir_write)))
       end if
-      
+
    end subroutine simulation_init
-   
-   
+
+
    !> Check TKE of LES and DNS
    subroutine simulation_run
       use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM
@@ -200,12 +200,12 @@ contains
       if (fsd%cfg%amRoot) print *, "TKE_interp / TKE_input = ", ratio
 
    end subroutine simulation_run
-   
-   
+
+
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
       deallocate(Uid,Vid,Wid,Uil,Vil,Wil)
    end subroutine simulation_final
-   
+
 end module simulation

@@ -1,13 +1,13 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-  use precision,        only: WP
-  use geometry,         only: cfg
-  use fftsolver_class,  only: fftsolver
-  use ensight_class,    only: ensight
+  use precision,          only: WP
+  use geometry,           only: cfg
+  use fftsolver3d_class,  only: fftsolver3d
+  use ensight_class,      only: ensight
   implicit none
   private
 
-  type(fftsolver), public :: ps
+  type(fftsolver3d), public :: ps
 
   !> Ensight postprocessing
   type(ensight)  :: ens_out
@@ -52,7 +52,7 @@ contains
       integer :: i, j, k
 
       ! create solver
-      ps = fftsolver(cfg=cfg, nst=7, name='FFT Poisson Test')
+      ps = fftsolver3d(cfg=cfg, nst=7, name='FFT Poisson Test')
       call ps%init()
 
       ! set stencil

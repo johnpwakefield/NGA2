@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use fftsolver_class,   only: fftsolver
+   use fftsolver3d_class, only: fftsolver3d
    use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -15,7 +15,7 @@ module simulation
    private
 
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(fftsolver),   public :: ps
+   type(fftsolver3d),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
 
@@ -193,7 +193,7 @@ module simulation
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=fftsolver(cfg=cfg,name='Pressure',nst=7)
+         ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver

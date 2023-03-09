@@ -1,27 +1,27 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
-  use string,            only: str_medium
-  use precision,         only: WP
-  use geometry,          only: cfg,D,get_VF
-  use lowmach_class,     only: lowmach
-  use fourier3d_class,   only: fourier3d
-  use hypre_str_class,   only: hypre_str
-  use lpt_class,         only: lpt
-  use timetracker_class, only: timetracker
-  use ensight_class,     only: ensight
-  use partmesh_class,    only: partmesh
-  use event_class,       only: event
-  use datafile_class,    only: datafile
-  use monitor_class,     only: monitor
+  use string,             only: str_medium
+  use precision,          only: WP
+  use geometry,           only: cfg,D,get_VF
+  use lowmach_class,      only: lowmach
+  use fftsolver3d_class,  only: fftsolver3d
+  use hypre_str_class,    only: hypre_str
+  use lpt_class,          only: lpt
+  use timetracker_class,  only: timetracker
+  use ensight_class,      only: ensight
+  use partmesh_class,     only: partmesh
+  use event_class,        only: event
+  use datafile_class,     only: datafile
+  use monitor_class,      only: monitor
   implicit none
   private
 
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker
-  type(lowmach),     public :: fs
-  type(fourier3d),   public :: ps
-  type(hypre_str),   public :: vs
-  type(lpt),         public :: lp
-  type(timetracker), public :: time
+  type(lowmach),      public :: fs
+  type(fftsolver3d),    public :: ps
+  type(hypre_str),    public :: vs
+  type(lpt),          public :: lp
+  type(timetracker),  public :: time
 
   !> Provide a datafile and an event tracker for saving restarts
   type(event)    :: save_evt
@@ -111,7 +111,7 @@ contains
 !!$      ! Deallocate work arrays
 !!$      deallocate(Uavg,Uavg_,vol,vol_)
     end subroutine postproc
-    
+
 
   !> Compute massflow rate
    function get_bodyforce_mfr(srcU) result(mfr)
@@ -194,7 +194,7 @@ contains
       end if
     end block restart_and_save
 
-    
+
     ! Revisit timetracker to adjust time and time step values if this is a restart
     update_timetracker: block
       if (restarted) then
@@ -204,7 +204,7 @@ contains
       end if
     end block update_timetracker
 
-    
+
     ! Initialize wallclock timers
     initialize_timers: block
       wt_total%time=0.0_WP; wt_total%percent=0.0_WP
@@ -228,7 +228,7 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
+      ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
       ! Configure implicit velocity solver
       vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
       call param_read('Implicit iteration',vs%maxit)

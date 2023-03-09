@@ -9,7 +9,7 @@ nx :	64
 Dynamic viscosity :    0.1
 Density :              1
 
-# Steadt-state (forcing) parameters
+# Steady-state (forcing) parameters
 Force to maximum Re_lambda : .true.
 Forcing constant     : 50.0
 
@@ -22,5 +22,6 @@ Max iter :          9999999
 Ensight output period : 0.1
 
 # Restart
-Restart output period : 200e-3	
+Restart output period : 200e-3
 # Restart from : 1.00044E-02
+

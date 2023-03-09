@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use fourier3d_class,   only: fourier3d
+   use fftsolver3d_class, only: fftsolver3d
    use incomp_class,      only: incomp
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -13,12 +13,12 @@ module simulation
    use string,            only: str_medium
    implicit none
    private
-   
+
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(fourier3d),   public :: ps
+   type(fftsolver3d),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
-   
+
    !> Ensight postprocessing
    type(partmesh) :: pmesh
    type(ensight)  :: ens_out
@@ -28,18 +28,18 @@ module simulation
    type(event)    :: save_evt
    type(datafile) :: df
    logical :: restarted
-   
+
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,hitfile,tfile,ssfile
-   
+
    public :: simulation_init,simulation_run,simulation_final
-   
+
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
-   
+
    !> Fluid, forcing, and particle parameters
    real(WP) :: visc,meanU,meanV,meanW
    real(WP) :: Urms0,TKE0,EPS0,Re_max
@@ -61,7 +61,7 @@ module simulation
       real(WP) :: percent
    end type timer
    type(timer) :: wt_total,wt_vel,wt_pres,wt_rest,wt_stat,wt_force
-   
+
  contains
 
 
@@ -107,14 +107,14 @@ module simulation
        ell_Lx    = ell/Lx
        Re_ratio  = Re_lambda/Re_max
      end subroutine compute_stats
-   
-   
+
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
-      
+
+
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -126,8 +126,8 @@ module simulation
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
-      
-      
+
+
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=cfg%amRoot)
@@ -182,7 +182,7 @@ module simulation
          wt_stat%time=0.0_WP;  wt_stat%percent=0.0_WP
          wt_force%time=0.0_WP; wt_force%percent=0.0_WP
       end block initialize_timers
-      
+
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
          use hypre_str_class, only: pcg_pfmg
@@ -193,7 +193,7 @@ module simulation
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
+         ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -202,7 +202,6 @@ module simulation
       initialize_velocity: block
          use random,   only: random_normal
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-         use parallel, only: MPI_REAL_WP
          use mathtools,only: Pi
          integer :: i,j,k
          ! Read in forcing, grid, and initial velocity field parameters
@@ -244,16 +243,16 @@ module simulation
             call fs%cfg%sync(fs%V)
             call fs%cfg%sync(fs%W)
          end if
-         
+
          ! Compute mean and remove it from the velocity field to obtain <U>=0
          call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
          call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
          call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
- 
+
          fs%U = fs%U - meanU
          fs%V = fs%V - meanV
          fs%W = fs%W - meanW
- 
+
          ! Project to ensure divergence-free
          call fs%get_div()
          fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
@@ -265,7 +264,7 @@ module simulation
          fs%U=fs%U-time%dt*resU/fs%rho
          fs%V=fs%V-time%dt*resV/fs%rho
          fs%W=fs%W-time%dt*resW/fs%rho
- 
+
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -273,7 +272,7 @@ module simulation
          ! Compute turbulence stats
          call compute_stats()
       end block initialize_velocity
-      
+
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
@@ -288,8 +287,8 @@ module simulation
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
-      
-      
+
+
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -363,23 +362,22 @@ module simulation
          call tfile%add_column(wt_rest%percent,'Rest [%]')
          call tfile%write()
       end block create_monitor
-      
-      
+
+
    end subroutine simulation_init
-   
-   
+
+
    !> Time integrate our problem
    subroutine simulation_run
       use parallel,       only: parallel_time
       implicit none
-      integer :: ii
-      
+
       ! Perform time integration
       do while (.not.time%done())
 
          ! init wallclock
          wt_total%time_in=parallel_time()
-         
+
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
@@ -429,10 +427,10 @@ module simulation
               myTKE=0.0_WP; myEPSp=0.0_WP
               do k=fs%cfg%kmin_,fs%cfg%kmax_
                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                    do i=fs%cfg%imin_,fs%cfg%imax_  
+                    do i=fs%cfg%imin_,fs%cfg%imax_
                        myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
 
-                       ! Pseudo-dissipation 
+                       ! Pseudo-dissipation
                        myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*(                   &
                             gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
                             gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
@@ -457,11 +455,11 @@ module simulation
             fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
             fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
             fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho
-            
+
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
             wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
-            
+
             ! Solve Poisson equation
             wt_pres%time_in=parallel_time()
             call fs%correct_mfr()
@@ -470,7 +468,7 @@ module simulation
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
-            
+
             ! Correct velocity
             call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
             fs%P=fs%P+fs%psolv%sol
@@ -481,12 +479,12 @@ module simulation
 
             ! Recompute interpolated velocity
             call fs%interp_vel(Ui,Vi,Wi)
-            
+
             ! Increment sub-iteration counter
             time%it=time%it+1
-   
+
          end do
-         
+
          wt_vel%time_in=parallel_time()
          ! Recompute divergence
          call fs%get_div()
@@ -496,10 +494,10 @@ module simulation
          wt_stat%time_in=parallel_time()
          call compute_stats()
          wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
-         
+
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
-         
+
          ! Perform and output monitoring
          call fs%get_max()
          call mfile%write()
@@ -541,29 +539,29 @@ module simulation
               call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
             end block save_restart
          end if
-         
+
       end do
-      
+
    end subroutine simulation_run
-   
-   
+
+
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
-      
+
       ! Get rid of all objects - need destructors
       ! monitor
       ! ensight
       ! bcond
       ! timetracker
-      
+
       ! Deallocate work arrays
       deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu)
-      
+
    end subroutine simulation_final
-   
-   
-   
-   
-   
+
+
+
+
+
 end module simulation

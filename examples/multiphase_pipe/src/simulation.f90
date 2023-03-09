@@ -54,8 +54,7 @@ contains
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
-      
+
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))   
@@ -170,10 +169,10 @@ contains
          ! Initial fields
          call param_read('Bulk velocity',Ubulk)
          fs%U=Ubulk; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
-         ! Get target MFR and zero bodyforce
-         mfr=get_bodyforce_mfr()
-         mfr_target=mfr
-         bforce=0.0_WP
+         ! Compute cell-centered velocity
+         call fs%interp_vel(Ui,Vi,Wi)
+         ! Compute divergence
+         call fs%get_div()
       end block initialize_velocity
       
       

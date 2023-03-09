@@ -5,7 +5,6 @@ NGA_HOME ?= ../..
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_FFTW  = TRUE
-USE_P3DFFT= TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
@@ -24,15 +23,12 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
-LAPACK_DIR= /opt/homebrew/Cellar/lapack/3.10.1_1
-HYPRE_DIR = /Users/jcaps/Research/Codes/Builds/hypre/
-FFTW_DIR=/opt/homebrew/Cellar/fftw/3.3.10_1
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := core constant_density data solver config grid libraries
+Bdirs   := core constant_density transform solver config grid libraries particles data
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
@@ -48,3 +44,4 @@ all: $(executable)
 
 # NGA compilation rules
 include $(NGA_HOME)/tools/GNUMake/Make.rules
+

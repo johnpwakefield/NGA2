@@ -31,6 +31,7 @@ module simulation
   !> Private work arrays
   real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+  real(WP), dimension(:,:,:), allocatable :: Uslip,Vslip,Wslip
 
   !> Droplet definition
   real(WP), dimension(3) :: center
@@ -81,14 +82,14 @@ contains
     ! Initialize our VOF solver and field
     create_and_initialize_vof: block
       use mms_geom,  only: cube_refine_vol
-      use vfs_class, only: elvira,VFhi,VFlo
+      use vfs_class, only: lvira,VFhi,VFlo
       integer :: i,j,k,n,si,sj,sk
       real(WP), dimension(3,8) :: cube_vertex
       real(WP), dimension(3) :: v_cent,a_cent
       real(WP) :: vol,area
       integer, parameter :: amr_ref_lvl=4
       ! Create a VOF solver
-      vf=vfs(cfg=cfg,reconstruction_method=elvira,name='VOF')
+      vf=vfs(cfg=cfg,reconstruction_method=lvira,name='VOF')
       ! Initialize to a droplet and a pool
       center=[0.0_WP,0.075_WP,0.0_WP]; radius=0.01_WP
       do k=vf%cfg%kmino_,vf%cfg%kmaxo_
@@ -121,6 +122,8 @@ contains
       call vf%update_band()
       ! Perform interface reconstruction from VOF field
       call vf%build_interface()
+      ! Set interface planes at the boundaries
+      call vf%set_full_bcond()
       ! Create discontinuous polygon mesh from IRL interface
       call vf%polygonalize_interface()
       ! Calculate distance from polygons
@@ -167,6 +170,16 @@ contains
     end block create_and_initialize_flow_solver
 
 
+    ! Slip velocity model for contact line
+    init_slip_velocity: block
+      use mathtools, only: Pi
+      allocate(Uslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Uslip=0.0_WP
+      allocate(Vslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Vslip=0.0_WP
+      allocate(Wslip(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); Wslip=0.0_WP
+      call param_read('Static contact angle',fs%contact_angle); fs%contact_angle=fs%contact_angle*Pi/180.0_WP
+    end block init_slip_velocity
+
+
     ! Add Ensight output
     create_ensight: block
       ! Create Ensight output from cfg
@@ -180,6 +193,7 @@ contains
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_scalar('curvature',vf%curv)
       call ens_out%add_scalar('Gib',cfg%Gib)
+      call ens_out%add_vector('slip',Uslip,Vslip,Wslip)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
@@ -228,6 +242,7 @@ contains
 
   !> Perform an NGA2 simulation - this mimicks NGA's old time integration for multiphase
   subroutine simulation_run
+    use tpns_class, only: static_contact
     implicit none
 
     ! Perform time integration
@@ -258,6 +273,35 @@ contains
        ! Prepare new staggered viscosity (at n+1)
        call fs%get_viscosity(vf=vf)
 
+       ! Evaluate IB slip velocity due to contact lien
+       calc_slip_velocity: block
+         use irl_fortran_interface
+         use mathtools, only: normalize
+         integer :: i,j,k
+         real(WP), dimension(3) :: nw,ni,nt
+         real(WP), parameter :: beta=10.0_WP
+         real(WP) :: slip
+         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+               do i=fs%cfg%imino_,fs%cfg%imaxo_
+                  ! Zero out Uslip if there's no interface or wall in the cell
+                  Uslip(i,j,k)=0.0_WP; Vslip(i,j,k)=0.0_WP; Wslip(i,j,k)=0.0_WP
+                  !if (getNumberOfVertices(vf%interface_polygon(1,i,j,k)).eq.0.or.cfg%VF(i,j,k).eq.1.0_WP) cycle
+                  ! There is an interface and a wall, find the slip velocity
+                  !nw=cfg%Nib(:,i,j,k); ni=calculateNormal(vf%interface_polygon(1,i,j,k))
+                  !slip=beta*fs%sigma*(cos(fs%contact_angle)-dot_product(ni,nw))
+                  ! Mess around with simple test
+                  slip=0.1_WP
+                  nw=cfg%Nib(:,i,j,k); ni=[0.0_WP,0.0_WP,1.0_WP]
+                  ! Find slip direction
+                  nt=normalize(ni-dot_product(ni,nw)*nw)
+                  ! Set slip velocity
+                  Uslip(i,j,k)=slip*nt(1); Vslip(i,j,k)=slip*nt(2); Wslip(i,j,k)=slip*nt(3)
+               end do
+            end do
+         end do
+       end block calc_slip_velocity
+
        ! Perform sub-iterations
        do while (time%it.le.time%itmax)
 
@@ -280,6 +324,20 @@ contains
           resV=-2.0_WP*fs%rho_V*fs%V+(fs%rho_Vold+fs%rho_V)*fs%Vold+time%dt*resV
           resW=-2.0_WP*fs%rho_W*fs%W+(fs%rho_Wold+fs%rho_W)*fs%Wold+time%dt*resW
 
+          ! Apply IB forcing to enforce BC at the pipe walls
+          !ibforcing: block
+          !   integer :: i,j,k
+          !   do k=fs%cfg%kmin_,fs%cfg%kmax_
+          !      do j=fs%cfg%jmin_,fs%cfg%jmax_
+          !         do i=fs%cfg%imin_,fs%cfg%imax_
+          !            resU(i,j,k)=resU(i,j,k)-(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*fs%rho_U(i,j,k)*fs%U(i,j,k)
+          !            resV(i,j,k)=resV(i,j,k)-(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*fs%rho_V(i,j,k)*fs%V(i,j,k)
+          !            resW(i,j,k)=resW(i,j,k)-(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*fs%rho_W(i,j,k)*fs%W(i,j,k)
+          !         end do
+          !      end do
+          !   end do
+          !end block ibforcing
+
           ! Form implicit residuals
           call fs%solve_implicit(time%dt,resU,resV,resW)
 
@@ -294,9 +352,14 @@ contains
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
+                     ! Set IB velocity to zero
                      fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
                      fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
                      fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
+                     ! Also add slip velocity for contact line
+                     fs%U(i,j,k)=fs%U(i,j,k)+(1.0_WP-sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k)))*sum(fs%itpr_x(:,i,j,k)*Uslip(i-1:i,j,k))
+                     fs%V(i,j,k)=fs%V(i,j,k)+(1.0_WP-sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k)))*sum(fs%itpr_y(:,i,j,k)*Vslip(i,j-1:j,k))
+                     fs%W(i,j,k)=fs%W(i,j,k)+(1.0_WP-sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k)))*sum(fs%itpr_z(:,i,j,k)*Wslip(i,j,k-1:k))
                   end do
                end do
             end do
@@ -312,8 +375,16 @@ contains
           call fs%update_laplacian()
           call fs%correct_mfr()
           call fs%get_div()
-          call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf)
+          call fs%add_surface_tension_jump(dt=time%dt,div=fs%div,vf=vf,contact_model=static_contact)
           fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+          test: block
+            real(WP) :: int
+            call cfg%integrate(A=fs%psolv%rhs,integral=int)
+            if (cfg%amroot) print*,'>>>   initial integral of pressure RHS=',int
+            fs%psolv%rhs=fs%psolv%rhs-int/cfg%fluid_vol
+            call cfg%integrate(A=fs%psolv%rhs,integral=int)
+            if (cfg%amroot) print*,'>>> corrected integral of pressure RHS=',int
+          end block test
           fs%psolv%sol=0.0_WP
           call fs%psolv%solve()
           call fs%shift_p(fs%psolv%sol)

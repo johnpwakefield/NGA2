@@ -37,10 +37,10 @@ module estimclosures_class
   real(WP), parameter :: FORCE_TIMESCALE = 1.0_WP
 
   !> sizes of reported statistics arrays
-  integer, parameter :: NUM_S = 14
-  integer, parameter :: NUM_M = 11
-  integer, parameter :: NUM_B = 0
-  integer, parameter :: NUM_H = 0
+  integer, parameter :: NUM_S = 14        ! spatial
+  integer, parameter :: NUM_M = 11        ! microscopic
+  integer, parameter :: NUM_B = 0         ! B eq verif
+  integer, parameter :: NUM_T = 0         ! Vie/Houssem two fluid
 
   !> structure containing statistics to store
   type :: statpoint
@@ -49,7 +49,8 @@ module estimclosures_class
     real(WP), dimension(NUM_S) :: S       ! spatial
     real(WP), dimension(NUM_M) :: M       ! microscopic
     real(WP), dimension(NUM_B) :: B       ! B eq verification
-    real(WP), dimension(NUM_H) :: H       ! Vie/Houssem equation
+    real(WP), dimension(NUM_T) :: T       ! Vie/Houssem equation
+    real(WP), dimension(4)     :: H       ! HIT params (computed elsewhere)
   end type statpoint
 
   !> filter information and corresponding monitor file
@@ -95,7 +96,12 @@ module estimclosures_class
     integer :: num_filters
     type(filter), dimension(:), allocatable :: filters
     ! number of timescales before writing output
-    real(WP) :: interval_tinfs
+    real(WP) :: interval_tinfs, sim_burnin_mult, param_burnin_mult
+    ! flags for recently changed parameters
+    logical :: new_simulation, new_params
+    ! store current parameter set
+    real(WP), dimension(7) :: params
+    real(WP), dimension(4) :: nondim
   contains
     procedure :: init => ec_init    ! parent constructor
     ! commented because I'm too lazy to write an interface block
@@ -109,6 +115,7 @@ module estimclosures_class
     ! nondim mesh info
     real(WP), dimension(4) :: pmin, pspacing
     integer, dimension(4) :: Icurr, Imax, Idir
+    integer :: curr_statpoint, data_per_statpoint
     ! primitive quantities that are constant (but not parameters)
     integer :: Np
     real(WP) :: nu
@@ -140,6 +147,11 @@ contains
 
     ! store pointer to simulation config
     ec%sim_pg => sim_pg
+
+    ! read params
+    call param_read('EC integral timescales', ec%interval_tinfs)
+    call param_read('EC new sim multiplier', ec%sim_burnin_mult)
+    call param_read('EC new params multiplier', ec%param_burnin_mult)
 
     ! setup ffts (they need their own, much finer, pgrid)
     call param_read('EC FFT mesh', FFTN)
@@ -237,10 +249,10 @@ contains
     call param_read('EC min vf',       ec%pmin(3))
     call param_read('EC max vf',          pmax(3))
     call param_read('EC num vf',       ec%Imax(3))
-    call param_read('EC integral timescales', ec%interval_tinfs)
+    call param_read('EC data per statpoint', ec%data_per_statpoint)
 
     ! init mesh
-    ec%Icurr(:) = 1; ec%Icurr(1) = 0; ec%Idir(:) = +1;
+    ec%Icurr(:) = 1; ec%Idir(:) = +1; ec%curr_statpoint = 0;
     do n = 1, 4
       if (ec%Imax(n) .gt. 1) then
         ec%pspacing(n) = (pmax(n) - ec%pmin(n)) / (ec%Imax(n) - 1)
@@ -248,9 +260,10 @@ contains
         ec%pspacing(n) = 0.0_WP
       end if
     end do
+    ec%new_simulation = .true.; ec%new_params = .true.;
 
     ! set up parameter computation (mostly computing viscosity)
-    etamin = ETAODX * cfg%min_meshsize**(1.0_WP / 3)
+    etamin = ETAODX * cfg%min_meshsize
     ec%nu = etamin**2 * pmax(1) / sqrt(15.0_WP)
 
   end function ecmesh_from_args 
@@ -269,6 +282,7 @@ contains
 
     ! setup monitor file
     flt%mon = monitor(fft%pg%amRoot, flt%out_fname)
+    call flt%mon%add_column(flt%d%step,  'step')
     call flt%mon%add_column(flt%d%S(1),  'PP')
     call flt%mon%add_column(flt%d%S(2),  'PPUBx')
     call flt%mon%add_column(flt%d%S(3),  'PPUBy')
@@ -294,6 +308,9 @@ contains
     call flt%mon%add_column(flt%d%M(9),  'VVyz')
     call flt%mon%add_column(flt%d%M(10), 'VVzz')
     call flt%mon%add_column(flt%d%M(11), 'DRG')
+    call flt%mon%add_column(flt%d%H(1),  'Relam')
+    call flt%mon%add_column(flt%d%H(2),  'St')
+    call flt%mon%add_column(flt%d%H(4),  'Wovk')
 
     ! allocate Fourier space filter
     allocate(flt%flt_f(fft%pg%imin_:fft%pg%imax_,fft%pg%jmin_:fft%pg%jmax_,   &
@@ -334,18 +351,27 @@ contains
   ! params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
   subroutine get_next_params(ec, params, done)
     use mathtools, only: pi
+    use messager, only: log
     implicit none
     class(estimclosures_mesh), intent(inout) :: ec
     real(WP), dimension(7), intent(out)      :: params
-    real(WP), dimension(4)                   :: nondim
     logical, intent(out)                     :: done
     integer :: n
+    character(len=str_long) :: message
 
     ! check if we are done
-    done = all(ec%Icurr .eq. ec%Imax)
+    done = ec%curr_statpoint .gt. ec%data_per_statpoint .and. all(ec%Icurr .eq. ec%Imax)
 
-    ! increment first coord
-    ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
+    ! increment first coord if we are done with current point
+    ec%curr_statpoint = ec%curr_statpoint + 1
+    if (ec%curr_statpoint .gt. ec%data_per_statpoint) then
+      ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
+      ec%curr_statpoint = 1
+      ec%new_params = .true.
+      ec%new_simulation = .false.
+    else
+      ec%new_params = .false.
+    end if
 
     ! if this pushes it past its bounds, increment the next coordinate instead
     ! and change directions of previous coordinate
@@ -358,20 +384,29 @@ contains
     end do
 
     ! get nondimensional values
-    nondim(:) = ec%pmin(:) + (ec%Icurr(:) - 1) * ec%pspacing(:)
+    ec%nondim(:) = ec%pmin(:) + (ec%Icurr(:) - 1) * ec%pspacing(:)
 
     ! fluid parameters
     ! using the current approach viscosity is fixed throughout; it is computed
     ! at initialization
-    params(1) = RHOF
-    params(5) = ec%nu
-    params(3) = nondim(1)**2 * ec%nu / (10 * FORCE_TIMESCALE)
-    params(4) = 2.0_WP / 3 * params(3) / FORCE_TIMESCALE
+    ec%params(1) = RHOF
+    ec%params(5) = ec%nu
+    ec%params(3) = ec%nondim(1)**2 * ec%nu / (10 * FORCE_TIMESCALE)
+    ec%params(4) = 2.0_WP / 3 * ec%params(3) / FORCE_TIMESCALE
 
     ! particle and gravity parameters
-    params(6) = (6 * ec%sim_pg%vol_total * nondim(3) / (pi * ec%Np))**(1.0_WP / 3)
-    params(2) = params(1) * 18 * nondim(2) * sqrt(ec%nu**3 / params(4)) / params(6)**2
-    params(7) = params(2) * params(6)**2 / (18 * params(1) * ec%nu)
+    ec%params(6) = (6 * ec%sim_pg%vol_total * ec%nondim(3) / (pi * ec%Np))**(1.0_WP / 3)
+    ec%params(2) = ec%params(1) * 18 * ec%nondim(2) * sqrt(ec%nu**3 / ec%params(4)) / ec%params(6)**2
+    ec%params(7) = ec%params(2) * ec%params(6)**2 / (18 * ec%params(1) * ec%nu)
+
+    ! log change if we moved to new parameters
+    if (ec%curr_statpoint .eq. 1 .and. ec%sim_pg%amRoot) then
+      write(message,'("[EC] changed to new param array: ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%params
+      call log(message)
+    end if
+
+    ! copy to output
+    params(:) = ec%params(:)
 
   end subroutine get_next_params
 
@@ -381,6 +416,12 @@ contains
     real(WP), intent(out) :: interval
 
     interval = ec%interval_tinfs * FORCE_TIMESCALE
+
+    if (ec%new_simulation) then
+      interval = interval * ec%sim_burnin_mult
+    else if (ec%new_params) then
+      interval = interval * ec%param_burnin_mult
+    end if
 
   end subroutine get_interval
 
@@ -482,6 +523,9 @@ contains
       ! set time and step in statpoint
       ec%filters(i)%d%time = time; ec%filters(i)%d%step = step;
 
+      ! store target fluid statistics
+      ec%filters(i)%d%H(:) = ec%nondim(:)
+
       ! compute filtered phi
       ec%phi_r = ec%phi_f * ec%filters(i)%flt_f
       call ec%fft%backward_transform(ec%phi_r)
@@ -557,7 +601,7 @@ contains
 
       !todo B
 
-      !todo H
+      !todo T
 
       ! save stats
       if (ec%fft%pg%rank .eq. 0) call ec%filters(i)%mon%write()

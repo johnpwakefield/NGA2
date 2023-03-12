@@ -15,7 +15,7 @@ module config_class
       ! Some more metrics
       real(WP), dimension(:,:,:), allocatable :: vol           !< Local cell volume
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
-      real(WP) :: min_meshsize                                 !< Global minimum mesh size
+      real(WP) :: min_meshsize, max_meshsize                    !< Global minimum and max mesh size
       
       ! Geometry
       real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
@@ -94,7 +94,7 @@ contains
    
    !> Prepare a config once the pgrid is set
    subroutine config_prep(this)
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX
       use parallel, only: MPI_REAL_WP
       implicit none
       class(config), intent(inout) :: this
@@ -124,6 +124,7 @@ contains
          end do
       end do
       call MPI_ALLREDUCE(minval(this%meshsize(this%imin_:this%imax_,this%jmin_:this%jmax_,this%kmin_:this%kmax_)),this%min_meshsize,1,MPI_REAL_WP,MPI_MIN,this%comm,ierr)
+      call MPI_ALLREDUCE(maxval(this%meshsize(this%imin_:this%imax_,this%jmin_:this%jmax_,this%kmin_:this%kmax_)),this%max_meshsize,1,MPI_REAL_WP,MPI_MAX,this%comm,ierr)
       
       ! Allocate wall geometry - assume all fluid until told otherwise
       allocate(this%VF(this%imino_:this%imaxo_,this%jmino_:this%jmaxo_,this%kmino_:this%kmaxo_)); this%VF=1.0_WP

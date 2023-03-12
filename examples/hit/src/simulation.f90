@@ -7,7 +7,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    use datafile_class,    only: datafile
    use string,            only: str_medium
@@ -22,10 +22,10 @@ module simulation
    !> Ensight postprocessing
    type(partmesh) :: pmesh
    type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(periodic_event)    :: ens_evt
 
    !> Provide a datafile and an event tracker for saving restarts
-   type(event)    :: save_evt
+   type(periodic_event)    :: save_evt
    type(datafile) :: df
    logical :: restarted
 
@@ -81,6 +81,9 @@ module simulation
        call fs%get_strainrate(SR=SR)
        call fs%get_gradu(gradu=gradu)
 
+       write(*,*) "min SR: ", minval(SR)
+       write(*,*) "max SR: ", maxval(SR)
+
        myTKE=0.0_WP; myEPS=0.0_WP
 
        do k=fs%cfg%kmin_,fs%cfg%kmax_
@@ -93,6 +96,8 @@ module simulation
        end do
        call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
        call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPS=EPS/fs%cfg%vol_total
+
+       write(*,*) "mean EPS: ", EPS
 
        URMS = sqrt(2.0_WP/3.0_WP*TKE)
        Re_L = TKE**2.0_WP/EPS/visc
@@ -142,7 +147,7 @@ module simulation
       restart_and_save: block
         character(len=str_medium) :: timestamp
         ! Create event for saving restart files
-        save_evt=event(time,'Restart output')
+        save_evt=periodic_event(time,'Restart output')
         call param_read('Restart output period',save_evt%tper)
         ! Check if we are restarting
         call param_read(tag='Restart from',val=timestamp,short='r',default='')
@@ -228,6 +233,7 @@ module simulation
             call df%pullvar(name='W',var=fs%W)
             call df%pullvar(name='P',var=fs%P)
          else
+           write(*,*) "TKE0: ", TKE0
             Urms0 = sqrt(0.6667_WP*TKE0)
             ! Gaussian initial field
             do k=fs%cfg%kmin_,fs%cfg%kmax_
@@ -278,7 +284,7 @@ module simulation
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='HIT')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)

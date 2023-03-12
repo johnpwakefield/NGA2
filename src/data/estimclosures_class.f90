@@ -20,7 +20,8 @@ module estimclosures_class
   implicit none
   private
 
-  public :: estimclosures
+  public :: estimclosures, estimclosures_mesh, FLT_NUM_PARAMS, FLT_GAUSSIAN,  &
+    ETAODX, RHOF, FORCE_TIMESCALE
 
   !> give all filters six parameters, not all of which may be used
   integer, parameter :: FLT_NUM_PARAMS = 6
@@ -28,8 +29,12 @@ module estimclosures_class
   !> filter types
   integer, parameter :: FLT_GAUSSIAN = 1
 
-  !> sampling modes
-  integer, parameter :: SEQ_MESH = 1
+  !> mesh spacing to parameter conversion
+  real(WP), parameter :: ETAODX = 0.5_WP
+
+  !> parameter primitive quantities
+  real(WP), parameter :: RHOF = 1.0_WP
+  real(WP), parameter :: FORCE_TIMESCALE = 1.0_WP
 
   !> sizes of reported statistics arrays
   integer, parameter :: NUM_S = 14
@@ -67,11 +72,15 @@ module estimclosures_class
     real(WP), dimension(FLT_NUM_PARAMS) :: params
   end type
 
+  !> parameters are stored in arrays, in the following order:
+  !> params_nondim - 4 items - Relambda, Stk, phiinf, Wovk
+  !> params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
+
   !> object managing computation of closures for each filter and navigation
   !> of paramter space
-  type :: estimclosures
+  type, abstract :: estimclosures
     ! configs for simulation
-    class(config), pointer :: sim_cfg
+    class(pgrid), pointer :: sim_pg
     ! fft object
     type(fft3d), pointer :: fft
     type(sgrid), pointer :: fft_sg
@@ -85,19 +94,34 @@ module estimclosures_class
     ! filter list
     integer :: num_filters
     type(filter), dimension(:), allocatable :: filters
-    contains
-      procedure :: get_done
-      procedure :: get_next_parameters
-      procedure :: get_next_time
-      procedure :: compute_statistics
-      procedure :: destruct => estimclosures_destruct
+    ! number of timescales before writing output
+    real(WP) :: interval_tinfs
+  contains
+    procedure :: init => ec_init    ! parent constructor
+    ! commented because I'm too lazy to write an interface block
+    !procedure, deferred :: get_next_params
+    !procedure, deferred :: get_interval
+    procedure :: compute_statistics
+    procedure :: destruct => ec_destruct
   end type estimclosures
 
-  interface estimclosures; procedure estimclosures_from_args; end interface
+  type, extends(estimclosures) :: estimclosures_mesh
+    ! nondim mesh info
+    real(WP), dimension(4) :: pmin, pspacing
+    integer, dimension(4) :: Icurr, Imax, Idir
+    ! primitive quantities that are constant (but not parameters)
+    integer :: Np
+    real(WP) :: nu
+  contains
+    procedure :: get_next_params
+    procedure :: get_interval
+  end type estimclosures_mesh
+
+  interface estimclosures_mesh; procedure ecmesh_from_args; end interface
 
 contains
 
-  function estimclosures_from_args(sim_cfg) result(ec)
+  subroutine ec_init(ec, sim_pg)
     use param,       only: param_read
     use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER, MPI_COMM_WORLD
     use parallel,    only: MPI_REAL_WP, group
@@ -105,8 +129,8 @@ contains
     use parallel,    only: group
     use messager,    only: die
     implicit none
-    type(estimclosures) :: ec
-    class(config), target, intent(in) :: sim_cfg
+    class(estimclosures), intent(inout) :: ec
+    class(pgrid), target, intent(in) :: sim_pg
     real(WP), dimension(3) :: dx
     real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
     integer, dimension(3) :: FFTN
@@ -115,11 +139,11 @@ contains
     integer :: li, hi, lj, hj, lk, hk, i, fh, ierr
 
     ! store pointer to simulation config
-    ec%sim_cfg => sim_cfg
+    ec%sim_pg => sim_pg
 
     ! setup ffts (they need their own, much finer, pgrid)
     call param_read('EC FFT mesh', FFTN)
-    dx(:) = (/ sim_cfg%xL, sim_cfg%yL, sim_cfg%zL /) / FFTN
+    dx(:) = (/ sim_pg%xL, sim_pg%yL, sim_pg%zL /) / FFTN
     allocate(fftxs(FFTN(1)+1), fftys(FFTN(2)+1), fftzs(FFTN(3)+1))
     do i = 1, FFTN(1) + 1; fftxs(i) = real(i-1,WP) * dx(1); end do;
     do i = 1, FFTN(2) + 1; fftys(i) = real(i-1,WP) * dx(2); end do;
@@ -127,8 +151,8 @@ contains
     allocate(ec%fft_sg, ec%fft_pg, ec%fft)
     ec%fft_sg = sgrid(coord=cartesian, no=0, x=fftxs, y=fftys, z=fftzs,       &
       xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
-    ec%fft_pg = pgrid(ec%fft_sg, group, (/ sim_cfg%npx, sim_cfg%npy,          &
-      sim_cfg%npz /))
+    ec%fft_pg = pgrid(ec%fft_sg, group, (/ sim_pg%npx, sim_pg%npy,            &
+      sim_pg%npz /))
     ec%fft = fft3d(ec%fft_pg)
 
     ! allocate arrays
@@ -147,7 +171,7 @@ contains
     allocate(ec%work_z_f(li:hi, lj:hj, lk:hk))
 
     ! read filter info (as root)
-    if (sim_cfg%rank .eq. 0) then
+    if (sim_pg%rank .eq. 0) then
       call param_read('EC filter list', filterfile)
       open(newunit=fh, file=filterfile, action='READ', access='SEQUENTIAL')
       ! first just count them
@@ -172,22 +196,64 @@ contains
         ec%filters(i)%params(:) = f_info_raw%params
       end do
       close(fh)
-      write(*,'("[EC] read in ",I2," filters")') ec%num_filters
     end if
 
     ! broadcast filter info and setup filters
-    call mpi_bcast(ec%num_filters, 1, MPI_INTEGER, 0, sim_cfg%comm, ierr)
-    if (sim_cfg%rank .ne. 0) allocate(ec%filters(ec%num_filters))
+    call mpi_bcast(ec%num_filters, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
+    if (sim_pg%rank .ne. 0) allocate(ec%filters(ec%num_filters))
     do i = 1, ec%num_filters
       call mpi_bcast(ec%filters(i)%out_fname, str_medium, MPI_CHARACTER, 0,   &
-        sim_cfg%comm, ierr)
-      call mpi_bcast(ec%filters(i)%type, 1, MPI_INTEGER, 0, sim_cfg%comm, ierr)
+        sim_pg%comm, ierr)
+      call mpi_bcast(ec%filters(i)%type, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
       call mpi_bcast(ec%filters(i)%params, FLT_NUM_PARAMS, MPI_REAL_WP, 0,    &
-        sim_cfg%comm, ierr)
+        sim_pg%comm, ierr)
       call ec%filters(i)%setup(ec%fft)
     end do
 
-  end function estimclosures_from_args
+  end subroutine ec_init
+
+  function ecmesh_from_args(cfg) result(ec)
+    use param, only: param_read
+    implicit none
+    type(estimclosures_mesh) :: ec
+    class(config), intent(in) :: cfg
+    real(WP), dimension(4) :: pmax
+    real(WP) :: etamin
+    integer :: n
+
+    ! init parent
+    call ec%init(cfg)
+
+    ! read params
+    call param_read('EC min Relambda', ec%pmin(1))
+    call param_read('EC max Relambda',    pmax(1))
+    call param_read('EC num Relambda', ec%Imax(1))
+    call param_read('EC min Stk',      ec%pmin(2))
+    call param_read('EC max Stk',         pmax(2))
+    call param_read('EC num Stk',      ec%Imax(2))
+    call param_read('EC min Wovk',     ec%pmin(4))
+    call param_read('EC max Wovk',        pmax(4))
+    call param_read('EC num Wovk',     ec%Imax(4))
+    call param_read('EC min vf',       ec%pmin(3))
+    call param_read('EC max vf',          pmax(3))
+    call param_read('EC num vf',       ec%Imax(3))
+    call param_read('EC integral timescales', ec%interval_tinfs)
+
+    ! init mesh
+    ec%Icurr(:) = 1; ec%Icurr(1) = 0; ec%Idir(:) = +1;
+    do n = 1, 4
+      if (ec%Imax(n) .gt. 1) then
+        ec%pspacing(n) = (pmax(n) - ec%pmin(n)) / (ec%Imax(n) - 1)
+      else
+        ec%pspacing(n) = 0.0_WP
+      end if
+    end do
+
+    ! set up parameter computation (mostly computing viscosity)
+    etamin = ETAODX * cfg%min_meshsize**(1.0_WP / 3)
+    ec%nu = etamin**2 * pmax(1) / sqrt(15.0_WP)
+
+  end function ecmesh_from_args 
 
   ! assumes out_fname, type, num_params, params are set
   ! assumes fft has been setup
@@ -264,35 +330,59 @@ contains
 
   end subroutine filter_setup
 
-  subroutine get_done(ec, done)
+  ! params_nondim - 4 items - Relambda, Stk, phiinf, Wovk
+  ! params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
+  subroutine get_next_params(ec, params, done)
+    use mathtools, only: pi
     implicit none
-    class(estimclosures), intent(inout) :: ec
-    logical, intent(out) :: done
+    class(estimclosures_mesh), intent(inout) :: ec
+    real(WP), dimension(7), intent(out)      :: params
+    real(WP), dimension(4)                   :: nondim
+    logical, intent(out)                     :: done
+    integer :: n
 
+    ! check if we are done
+    done = all(ec%Icurr .eq. ec%Imax)
 
+    ! increment first coord
+    ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
 
+    ! if this pushes it past its bounds, increment the next coordinate instead
+    ! and change directions of previous coordinate
+    do n = 1, 3
+      if (ec%Icurr(n) .lt. 1 .or. ec%Icurr(n) .gt. ec%Imax(n)) then
+        ec%Icurr(n) = ec%Icurr(n) - ec%Idir(n)
+        ec%Icurr(n+1) = ec%Icurr(n+1) + ec%Idir(n+1)
+        ec%Idir(n) = -1 * ec%Idir(n)
+      end if
+    end do
 
-  end subroutine get_done
+    ! get nondimensional values
+    nondim(:) = ec%pmin(:) + (ec%Icurr(:) - 1) * ec%pspacing(:)
 
-  subroutine get_next_parameters(ec)
+    ! fluid parameters
+    ! using the current approach viscosity is fixed throughout; it is computed
+    ! at initialization
+    params(1) = RHOF
+    params(5) = ec%nu
+    params(3) = nondim(1)**2 * ec%nu / (10 * FORCE_TIMESCALE)
+    params(4) = 2.0_WP / 3 * params(3) / FORCE_TIMESCALE
+
+    ! particle and gravity parameters
+    params(6) = (6 * ec%sim_pg%vol_total * nondim(3) / (pi * ec%Np))**(1.0_WP / 3)
+    params(2) = params(1) * 18 * nondim(2) * sqrt(ec%nu**3 / params(4)) / params(6)**2
+    params(7) = params(2) * params(6)**2 / (18 * params(1) * ec%nu)
+
+  end subroutine get_next_params
+
+  subroutine get_interval(ec, interval)
     implicit none
-    class(estimclosures), intent(inout) :: ec
+    class(estimclosures_mesh), intent(in) :: ec
+    real(WP), intent(out) :: interval
 
+    interval = ec%interval_tinfs * FORCE_TIMESCALE
 
-
-  end subroutine get_next_parameters
-
-  subroutine get_next_time(ec)
-    implicit none
-    class(estimclosures), intent(inout) :: ec
-
-
-
-
-
-
-
-  end subroutine get_next_time
+  end subroutine get_interval
 
   subroutine filter_destruct(flt)
     implicit none
@@ -302,12 +392,12 @@ contains
 
   end subroutine filter_destruct
 
-  subroutine estimclosures_destruct(ec, dealloc_sim_cfg)
+  subroutine ec_destruct(ec, dealloc_sim_pg)
     implicit none
     class(estimclosures), intent(inout) :: ec
-    logical, intent(in), optional :: dealloc_sim_cfg
+    logical, intent(in), optional :: dealloc_sim_pg
 
-    if (present(dealloc_sim_cfg) .and. dealloc_sim_cfg) deallocate(ec%sim_cfg)
+    if (present(dealloc_sim_pg) .and. dealloc_sim_pg) deallocate(ec%sim_pg)
 
     deallocate(ec%fft_sg, ec%fft_pg, ec%fft)
 
@@ -317,7 +407,7 @@ contains
 
     deallocate(ec%filters)
 
-  end subroutine estimclosures_destruct
+  end subroutine ec_destruct
 
   subroutine compute_statistics(ec, time, step, ps)
     use mpi_f08,    only:  MPI_CHARACTER, MPI_INTEGER, mpi_reduce, MPI_SUM
@@ -366,10 +456,10 @@ contains
       ec%vel_y_f(i,j,k) = ec%vel_y_f(i,j,k) + pvol * ps%p(n)%vel(2)
       ec%vel_z_f(i,j,k) = ec%vel_z_f(i,j,k) + pvol * ps%p(n)%vel(3)
     end do
-    ec%phi_f = ec%phi_f * N3 / ec%sim_cfg%vol_total
-    ec%vel_x_f = ec%vel_x_f * N3 / ec%sim_cfg%vol_total
-    ec%vel_y_f = ec%vel_y_f * N3 / ec%sim_cfg%vol_total
-    ec%vel_z_f = ec%vel_z_f * N3 / ec%sim_cfg%vol_total
+    ec%phi_f = ec%phi_f * N3 / ec%sim_pg%vol_total
+    ec%vel_x_f = ec%vel_x_f * N3 / ec%sim_pg%vol_total
+    ec%vel_y_f = ec%vel_y_f * N3 / ec%sim_pg%vol_total
+    ec%vel_z_f = ec%vel_z_f * N3 / ec%sim_pg%vol_total
     call mpi_reduce(ps%np_, n, 1, MPI_INTEGER, MPI_SUM, 0, ec%fft%pg%comm)
     call mpi_reduce(dp_loc, dp, 1, MPI_REAL_WP, MPI_SUM, 0, ec%fft%pg%comm)
     call mpi_reduce(vf_loc, vf, 1, MPI_REAL_WP, MPI_SUM, 0, ec%fft%pg%comm)
@@ -377,7 +467,7 @@ contains
     call mpi_reduce(meanVV_loc, meanVV, 6, MPI_REAL_WP, MPI_SUM, 0,           &
       ec%fft%pg%comm)
     if (ec%fft%pg%rank .eq. 0) then
-      dp = dp / n; vf = vf / ec%sim_cfg%vol_total; meanVV = meanVV / n;
+      dp = dp / n; vf = vf / ec%sim_pg%vol_total; meanVV = meanVV / n;
     end if
 
     ! do forward transforms to get variables in fourier space
@@ -456,8 +546,8 @@ contains
       ! set S5
       ec%phi_r = ec%phi_r * ec%phi_r  ! in place should be faster than work_r
       tmpvec(1) = sum(realpart(ec%phi_r))
-      call mpi_reduce(tmpvec(1), ec%filters(i)%d%S(5), 1, MPI_REAL_WP, MPI_SUM, 0,      &
-        ec%fft%pg%comm)
+      call mpi_reduce(tmpvec(1), ec%filters(i)%d%S(5), 1, MPI_REAL_WP,        &
+        MPI_SUM, 0, ec%fft%pg%comm)
       ec%filters(i)%d%S(5) = ec%filters(i)%d%S(5) / N3
 
       ! copy microscopic statistics

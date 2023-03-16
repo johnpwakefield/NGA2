@@ -835,9 +835,9 @@ contains
       real(WP) :: Re,tau,corr,b1,b2
       ! Particle Reynolds number
       Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-      !if (.not. (Re .lt. 2.0_WP)) then
-      !  write(*,*) "proc ", this%cfg%rank, ", particle id ", p%id, ", slip ", norm2(p%vel - fvel), ", Rep ", Re
-      !end if
+      if (.not. (Re .lt. 2.0_WP)) then
+        write(*,*) "proc ", this%cfg%rank, ", particle id ", p%id, ", slip ", norm2(p%vel - fvel), ", Rep ", Re
+      end if
       ! Drag correction
       select case(trim(this%drag_model))
       case('None','none')

@@ -34,6 +34,7 @@ module estimclosures_class
 
   !> parameter primitive quantities
   real(WP), parameter :: RHOF = 1.0_WP
+  real(WP), parameter :: LEN_SCALE_PROPORTION = 0.2_WP
   real(WP), parameter :: FORCE_TIMESCALE = 1.0_WP
 
   !> sizes of reported statistics arrays
@@ -95,10 +96,10 @@ module estimclosures_class
     ! filter list
     integer :: num_filters
     type(filter), dimension(:), allocatable :: filters
+    ! integral length scales
+    real(WP) :: linf, etamin, eta
     ! number of timescales before writing output
     real(WP) :: interval_tinfs, sim_burnin_mult, param_burnin_mult
-    ! flags for recently changed parameters
-    logical :: new_simulation, new_params
     ! store current parameter set
     real(WP), dimension(7) :: params
     real(WP), dimension(4) :: nondim
@@ -113,12 +114,11 @@ module estimclosures_class
 
   type, extends(estimclosures) :: estimclosures_mesh
     ! nondim mesh info
-    real(WP), dimension(4) :: pmin, pspacing
+    real(WP), dimension(4) :: pmin, pmax, pspacing
     integer, dimension(4) :: Icurr, Imax, Idir
     integer :: curr_statpoint, data_per_statpoint
     ! primitive quantities that are constant (but not parameters)
     integer :: Np
-    real(WP) :: nu
   contains
     procedure :: get_next_params
     procedure :: get_interval
@@ -130,10 +130,10 @@ contains
 
   subroutine ec_init(ec, sim_pg)
     use param,       only: param_read
-    use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER, MPI_COMM_WORLD
-    use parallel,    only: MPI_REAL_WP, group
+    use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
+      MPI_COMM_WORLD
+    use parallel,    only: MPI_REAL_WP, GROUP
     use sgrid_class, only: cartesian
-    use parallel,    only: group
     use messager,    only: die
     implicit none
     class(estimclosures), intent(inout) :: ec
@@ -147,6 +147,15 @@ contains
 
     ! store pointer to simulation config
     ec%sim_pg => sim_pg
+
+    ! set integral length scales
+    ec%linf = LEN_SCALE_PROPORTION * ec%sim_pg%vol_total**(1.0_WP / 3)
+    !TODO move min and max meshsizes to pgrid
+    ec%etamin = ETAODX * min(                                                 &
+      minval(sim_pg%dx(sim_pg%imin_:sim_pg%imax_)),                           &
+      minval(sim_pg%dy(sim_pg%jmin_:sim_pg%jmax_)),                           &
+      minval(sim_pg%dz(sim_pg%kmin_:sim_pg%kmax_))                            &
+    )
 
     ! read params
     call param_read('EC integral timescales', ec%interval_tinfs)
@@ -163,7 +172,7 @@ contains
     allocate(ec%fft_sg, ec%fft_pg, ec%fft)
     ec%fft_sg = sgrid(coord=cartesian, no=0, x=fftxs, y=fftys, z=fftzs,       &
       xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
-    ec%fft_pg = pgrid(ec%fft_sg, group, (/ sim_pg%npx, sim_pg%npy,            &
+    ec%fft_pg = pgrid(ec%fft_sg, GROUP, (/ sim_pg%npx, sim_pg%npy,            &
       sim_pg%npz /))
     ec%fft = fft3d(ec%fft_pg)
 
@@ -225,46 +234,46 @@ contains
   end subroutine ec_init
 
   function ecmesh_from_args(cfg) result(ec)
+    use messager, only: die
     use param, only: param_read
     implicit none
     type(estimclosures_mesh) :: ec
     class(config), intent(in) :: cfg
-    real(WP), dimension(4) :: pmax
-    real(WP) :: etamin
     integer :: n
+    real(WP) :: Relammax
 
     ! init parent
     call ec%init(cfg)
 
     ! read params
     call param_read('EC min Relambda', ec%pmin(1))
-    call param_read('EC max Relambda',    pmax(1))
+    call param_read('EC max Relambda', ec%pmax(1))
     call param_read('EC num Relambda', ec%Imax(1))
     call param_read('EC min Stk',      ec%pmin(2))
-    call param_read('EC max Stk',         pmax(2))
+    call param_read('EC max Stk',      ec%pmax(2))
     call param_read('EC num Stk',      ec%Imax(2))
     call param_read('EC min Wovk',     ec%pmin(4))
-    call param_read('EC max Wovk',        pmax(4))
+    call param_read('EC max Wovk',     ec%pmax(4))
     call param_read('EC num Wovk',     ec%Imax(4))
     call param_read('EC min vf',       ec%pmin(3))
-    call param_read('EC max vf',          pmax(3))
+    call param_read('EC max vf',       ec%pmax(3))
     call param_read('EC num vf',       ec%Imax(3))
     call param_read('EC data per statpoint', ec%data_per_statpoint)
+
+    ! make sure the largest requirest Relambda is representable on the mesh
+    Relammax = sqrt(15.0_WP) * (ec%linf / ec%etamin)**(2.0_WP / 3)
+    if (ec%pmax(1) .gt. Relammax) call die("[EC] requested Relambda is greater&
+      & than what is possible to resolve on mesh")
 
     ! init mesh
     ec%Icurr(:) = 1; ec%Idir(:) = +1; ec%curr_statpoint = 0;
     do n = 1, 4
       if (ec%Imax(n) .gt. 1) then
-        ec%pspacing(n) = (pmax(n) - ec%pmin(n)) / (ec%Imax(n) - 1)
+        ec%pspacing(n) = (ec%pmax(n) - ec%pmin(n)) / (ec%Imax(n) - 1)
       else
         ec%pspacing(n) = 0.0_WP
       end if
     end do
-    ec%new_simulation = .true.; ec%new_params = .true.;
-
-    ! set up parameter computation (mostly computing viscosity)
-    etamin = ETAODX * cfg%min_meshsize
-    ec%nu = etamin**2 * pmax(1) / sqrt(15.0_WP)
 
   end function ecmesh_from_args 
 
@@ -351,7 +360,7 @@ contains
   ! params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
   subroutine get_next_params(ec, params, done)
     use mathtools, only: pi
-    use messager, only: log
+    use messager,  only: die, log
     implicit none
     class(estimclosures_mesh), intent(inout) :: ec
     real(WP), dimension(7), intent(out)      :: params
@@ -360,17 +369,14 @@ contains
     character(len=str_long) :: message
 
     ! check if we are done
-    done = ec%curr_statpoint .gt. ec%data_per_statpoint .and. all(ec%Icurr .eq. ec%Imax)
+    done = ec%curr_statpoint .gt. ec%data_per_statpoint                       &
+      .and. all(ec%Icurr .eq. ec%Imax)
 
     ! increment first coord if we are done with current point
     ec%curr_statpoint = ec%curr_statpoint + 1
     if (ec%curr_statpoint .gt. ec%data_per_statpoint) then
       ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
       ec%curr_statpoint = 1
-      ec%new_params = .true.
-      ec%new_simulation = .false.
-    else
-      ec%new_params = .false.
     end if
 
     ! if this pushes it past its bounds, increment the next coordinate instead
@@ -386,18 +392,26 @@ contains
     ! get nondimensional values
     ec%nondim(:) = ec%pmin(:) + (ec%Icurr(:) - 1) * ec%pspacing(:)
 
+    ! check to make sure we didn't make a mistake
+    if (any(ec%nondim - 1e2_WP * epsilon(1.0_WP) .gt. ec%pmax)) call die('[EC]&
+      & big whoops')
+    if (any(ec%nondim + 1e2_WP * epsilon(1.0_WP) .lt. ec%pmin)) call die('[EC]&
+      & little whoops')
+
     ! fluid parameters
     ! using the current approach viscosity is fixed throughout; it is computed
     ! at initialization
     ec%params(1) = RHOF
-    ec%params(5) = ec%nu
-    ec%params(3) = ec%nondim(1)**2 * ec%nu / (10 * FORCE_TIMESCALE)
-    ec%params(4) = 2.0_WP / 3 * ec%params(3) / FORCE_TIMESCALE
+    ec%eta = ec%linf * (sqrt(15.0_WP) / ec%nondim(1))**1.5_WP
+    if (ec%eta .lt. ec%etamin) call die("[EC] computed eta less than etamin")
+    ec%params(5) = ec%eta**2 * ec%nondim(1) / (FORCE_TIMESCALE * sqrt(15.0_WP))
+    ec%params(4) = ec%params(5)**3 / ec%eta**4
+    ec%params(3) = 1.5_WP * ec%params(4) * FORCE_TIMESCALE
 
     ! particle and gravity parameters
     ec%params(6) = (6 * ec%sim_pg%vol_total * ec%nondim(3) / (pi * ec%Np))**(1.0_WP / 3)
-    ec%params(2) = ec%params(1) * 18 * ec%nondim(2) * sqrt(ec%nu**3 / ec%params(4)) / ec%params(6)**2
-    ec%params(7) = ec%params(2) * ec%params(6)**2 / (18 * ec%params(1) * ec%nu)
+    ec%params(2) = ec%params(1) * 18 * ec%nondim(2) * sqrt(ec%params(5)**3 / ec%params(4)) / ec%params(6)**2
+    ec%params(7) = ec%params(2) * ec%params(6)**2 / (18 * ec%params(1) * ec%params(5))
 
     ! log change if we moved to new parameters
     if (ec%curr_statpoint .eq. 1 .and. ec%sim_pg%amRoot) then
@@ -417,10 +431,12 @@ contains
 
     interval = ec%interval_tinfs * FORCE_TIMESCALE
 
-    if (ec%new_simulation) then
-      interval = interval * ec%sim_burnin_mult
-    else if (ec%new_params) then
-      interval = interval * ec%param_burnin_mult
+    if (ec%curr_statpoint .eq. 1) then
+      if (all(ec%Icurr(:) .eq. 1)) then             ! new sim
+        interval = interval * ec%sim_burnin_mult
+      else                                          ! new params
+        interval = interval * ec%param_burnin_mult
+      end if
     end if
 
   end subroutine get_interval

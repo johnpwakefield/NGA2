@@ -57,7 +57,8 @@ module simulation
   real(WP) :: G
 
   !> For monitoring
-  real(WP) :: Re_lambda, EPS_ratio, TKE_ratio, eta, ell, dx_eta, nondimtime
+  real(WP) :: Re_lambda, EPS_ratio, TKE_ratio, eta, ell_ratio, dx_eta,        &
+    nondimtime, permissible_eps_err
 
   !> Wallclock time for monitoring
   type :: timer; real(WP) :: time_in, time, percent; end type timer
@@ -121,9 +122,10 @@ contains
     Re_lambda = sqrt(20.0_WP / 3) * TKE * (eta / ec_params(5))**2
     EPS_ratio = EPS / ec_params(4)
     TKE_ratio = TKE / ec_params(3)
-    ell = (2.0_WP / 3 * TKE)**1.5_WP / EPS
+    ell_ratio = (2.0_WP / 3 * TKE)**1.5_WP / EPS / (cfg%vol_total)**(1.0_WP/3)
     dx_eta = cfg%max_meshsize**(1.0_WP/3) / eta
     nondimtime = time%t / (2 * ec_params(3)) * (3 * ec_params(4))
+    permissible_eps_err = (TKE - ec_params(3)) / ec_params(3) * G * ec_params(4)
 
   end subroutine compute_stats
 
@@ -192,8 +194,9 @@ contains
       call param_read('Max timestep size',time%dtmax)
       call param_read('Max cfl number',time%cflmax)
       call param_read('Max iter',time%nmax)
+      time%dtmin=1e3*epsilon(0.0_WP)
       time%dt=time%dtmax
-      time%itmax=1      ! fourier solver
+      time%itmax=1              ! fourier solver
     end block initialize_timetracker
 
     ! Initialize timers
@@ -421,12 +424,14 @@ contains
       call hitfile%add_column(Re_lambda,'Re_lambda')
       call hitfile%add_column(TKE_ratio,'TKEratio')
       call hitfile%add_column(EPS_ratio,'EPSratio')
+      call hitfile%add_column(ell_ratio,'ell_ratio')
       call hitfile%add_column(dx_eta,'dx_eta')
+      call hitfile%add_column(permissible_eps_err,'permepserr')
       call hitfile%add_column(eta,'eta')
       call hitfile%add_column(TKE,'TKE')
       call hitfile%add_column(EPS,'EPS')
-      call hitfile%add_column(urms,'Urms')
-      call hitfile%add_column(ell,'L')
+      !call hitfile%add_column(urms,'Urms')
+      !call hitfile%add_column(ell,'L')
       call hitfile%write()
       ! Create hit convergence monitor
       ssfile=monitor(fs%cfg%amRoot,'convergence')
@@ -436,6 +441,7 @@ contains
       call ssfile%add_column(eps_ratio,'EPS_ratio')
       call ssfile%add_column(tke_ratio,'TKE_ratio')
       call ssfile%add_column(dx_eta,'dx/eta')
+      call ssfile%add_column(ell_ratio,'ell_ratio')
       call ssfile%write()
       ! Create LPT monitor
       call lp%get_max()
@@ -522,13 +528,14 @@ contains
           ! Add linear forcing term: Bassenne et al. (2016)
           wt_force%time_in=parallel_time()
           ! we have stats from the previous step; they haven't changed
-          !call compute_stats()
+          !TODO turning this on while debugging
+          call compute_stats()
           linear_forcing: block
             use estimclosures_class, only: FORCE_TIMESCALE
             use messager,            only: die
             real(WP) :: A, Gdtau
             Gdtau =  G / FORCE_TIMESCALE
-            if (Gdtau**(-1) .lt.time%dt) call die("[linear_forcing] &
+            if (Gdtau**(-1).lt.time%dt) call die("[linear_forcing] &
               &Controller time constant less than timestep")
             ! - Eq. (7) (forcing constant TKE)
             A = (EPSp - Gdtau * (TKE - ec_params(3))) / (2.0_WP * TKE) * fs%rho
@@ -601,7 +608,8 @@ contains
         wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
         wt_stat%percent=wt_stat%time/wt_total%time*100.0_WP
         wt_force%percent=wt_force%time/wt_total%time*100.0_WP
-        wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_stat%time-wt_force%time
+        wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_stat%time      &
+          -wt_force%time
         wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
         call tfile%write()
         wt_total%time=0.0_WP; wt_total%percent=0.0_WP

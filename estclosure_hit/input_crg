@@ -2,27 +2,27 @@
 Partition :	4 8 1
 
 # Mesh definition
-Lx :	1.0
+Lx :	6.2832
 nx :	128 128 128
 
 # Particle Parameters
-Number of particles :   800000
+Number of particles :   0
 
 # Steady-state (forcing) parameters
-Forcing constant :      8.0
+Forcing constant :      50.0
 
 # Parameter sweep
-EC min Relambda : 20.0
-EC max Relambda : 50.0
-EC num Relambda : 3
+EC min Relambda : 55.0
+EC max Relambda : 55.0
+EC num Relambda : 1
 EC min Stk      : 0.25
 EC max Stk      : 2.0
 EC num Stk      : 8
 EC min Wovk     : 0.0
 EC max Wovk     : 0.0
 EC num Wovk     : 1
-EC min vf       : 1e-6
-EC max vf       : 1e-3
+EC min vf       : 1e-16
+EC max vf       : 1e-16
 EC num vf       : 5
 EC data per statpoint : 8
 
@@ -34,10 +34,10 @@ EC new params multiplier :  04.0
 # EC Parameters
 EC FFT mesh       : 256 256 256
 EC filter list    : filterlist.txt
-EC output period  : 1e-2
+EC output period  : 1e-0
 
 # Time integration
-Max timestep size : 1e-1
+Max timestep size : 1e-2
 Max cfl number    : 0.9
 Max iter          : 9999999
 

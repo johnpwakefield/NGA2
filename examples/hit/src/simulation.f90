@@ -81,9 +81,6 @@ module simulation
        call fs%get_strainrate(SR=SR)
        call fs%get_gradu(gradu=gradu)
 
-       write(*,*) "min SR: ", minval(SR)
-       write(*,*) "max SR: ", maxval(SR)
-
        myTKE=0.0_WP; myEPS=0.0_WP
 
        do k=fs%cfg%kmin_,fs%cfg%kmax_
@@ -96,8 +93,6 @@ module simulation
        end do
        call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
        call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPS=EPS/fs%cfg%vol_total
-
-       write(*,*) "mean EPS: ", EPS
 
        URMS = sqrt(2.0_WP/3.0_WP*TKE)
        Re_L = TKE**2.0_WP/EPS/visc
@@ -223,6 +218,11 @@ module simulation
             EPS0 = 5.0_WP*(0.6667_WP*TKE0)**1.5_WP / Lx
          end if
          Re_max = sqrt(15.0_WP*sqrt(0.6667_WP*TKE0)*0.2_WP*Lx/visc)
+         if (cfg%amroot) then
+           write(*,*) "Re_max: ", Re_max
+           write(*,*) "Re_max: ", sqrt(15.0_WP) * (0.2_WP * Lx / (visc**3 / EPS0)**0.25_WP)**(2.0_WP / 3)
+           write(*,*) "Re_target: ", 2.0_WP / 3 * sqrt(15.0_WP * visc / EPS0) * TKE0 / visc
+         end if
          tauinf = 2.0_WP*TKE0/(3.0_WP*EPS0)
          Gdtau = G/tauinf
          Gdtaui= 1/Gdtau
@@ -233,7 +233,6 @@ module simulation
             call df%pullvar(name='W',var=fs%W)
             call df%pullvar(name='P',var=fs%P)
          else
-           write(*,*) "TKE0: ", TKE0
             Urms0 = sqrt(0.6667_WP*TKE0)
             ! Gaussian initial field
             do k=fs%cfg%kmin_,fs%cfg%kmax_
@@ -277,6 +276,7 @@ module simulation
 
          ! Compute turbulence stats
          call compute_stats()
+
       end block initialize_velocity
 
       ! Add Ensight output
@@ -369,6 +369,23 @@ module simulation
          call tfile%write()
       end block create_monitor
 
+      print_statistics: block
+        use string, only: str_long
+        use messager, only: log
+        character(len=str_long) :: message
+
+        if (cfg%amroot) then
+          write(message,'("Turbulent parameters:")'); call log(message);
+          write(message,'("    Fluid density: ",e12.6)') fs%rho; call log(message);
+          write(message,'("    Target TKE: ",e12.6)') TKE0; call log(message);
+          write(message,'("    Target EPS: ",e12.6)') EPS0; call log(message);
+          write(message,'("    Kinematic Viscosity: ",e12.6)') visc; call log(message);
+          write(message,'("    Gdtau: ",e12.6)') Gdtau; call log(message);
+          write(message,'("    Gdtaui: ",e12.6)') Gdtaui; call log(message);
+          if (maxRe) write(message,'("    Target Relambda: ",e12.6)') Re_max; call log(message);
+        end if
+
+      end block print_statistics
 
    end subroutine simulation_init
 
@@ -449,6 +466,7 @@ module simulation
 
               if (Gdtaui.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
               A = (EPSp - Gdtau*(TKE-TKE0))/(2.0_WP*TKE)*fs%rho ! - Eq. (7) (forcing constant TKE)
+              if (cfg%amroot) write(*,*) EPSp, ", ", G, ", ", TKE, ", ", TKE0, ", ", fs%rho, ", ", A
 
               resU=resU+time%dt*(fs%U-meanU)*A
               resV=resV+time%dt*(fs%V-meanV)*A

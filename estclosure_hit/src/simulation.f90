@@ -35,9 +35,11 @@ module simulation
   !> Closure Estimation
   type(estimclosures_mesh) :: ec
   type(threshold_event)    :: ec_evt
-  ! 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
-  real(WP), dimension(7)   :: ec_params
   logical                  :: ec_done
+
+  !> Turbulent Parameters
+  real(WP), dimension(7)   :: ec_params   ! rhof, rhop, ktarget, epstarget, nu, dp, g
+  real(WP) :: TKE_target, EPS_target, nu, dp
 
   !> Simulation monitor file
   type(monitor) :: mfile, cflfile, hitfile, lptfile, tfile, ssfile
@@ -73,18 +75,13 @@ contains
     real(WP) :: myTKE, myEPS, myEPSp
     integer :: i, j, k, ierr
 
-    ! sync just in case (shouldn't be necessary)
-    call fs%cfg%sync(fs%U)
-    call fs%cfg%sync(fs%V)
-    call fs%cfg%sync(fs%W)
-
     ! Compute mean velocities
-    call fs%cfg%integrate(A=Ui,integral=meanU)
-    meanU = meanU / fs%cfg%vol_total
-    call fs%cfg%integrate(A=Vi,integral=meanV)
-    meanV = meanV / fs%cfg%vol_total
-    call fs%cfg%integrate(A=Wi,integral=meanW)
-    meanW = meanW / fs%cfg%vol_total
+    call fs%cfg%integrate(A=fs%U,integral=meanU); meanU = meanU / fs%cfg%vol_total;
+    call fs%cfg%integrate(A=fs%V,integral=meanV); meanV = meanV / fs%cfg%vol_total;
+    call fs%cfg%integrate(A=fs%W,integral=meanW); meanW = meanW / fs%cfg%vol_total;
+
+    ! Interpolate
+    call fs%interp_vel(Ui, Vi, Wi)
 
     ! Compute strainrate and grad(u)
     call fs%get_strainrate(SR=SR)
@@ -118,14 +115,14 @@ contains
     urms = sqrt(2.0_WP / 3 * TKE)
 
     ! additional monitoring quantities
-    eta = (ec_params(5)**3 / EPS)**0.25_WP
-    Re_lambda = sqrt(20.0_WP / 3) * TKE * (eta / ec_params(5))**2
-    EPS_ratio = EPS / ec_params(4)
-    TKE_ratio = TKE / ec_params(3)
+    eta = (nu**3 / EPS)**0.25_WP
+    Re_lambda = sqrt(20.0_WP / 3) * TKE * (eta / nu)**2
+    EPS_ratio = EPS / EPS_target
+    TKE_ratio = TKE / TKE_target
     ell_ratio = (2.0_WP / 3 * TKE)**1.5_WP / EPS / (cfg%vol_total)**(1.0_WP/3)
-    dx_eta = cfg%max_meshsize**(1.0_WP/3) / eta
-    nondimtime = time%t / (2 * ec_params(3)) * (3 * ec_params(4))
-    permissible_eps_err = (TKE - ec_params(3)) / ec_params(3) * G * ec_params(4)
+    dx_eta = cfg%max_meshsize / eta
+    nondimtime = time%t / (2 * TKE_target) * (3 * EPS_target)
+    permissible_eps_err = (TKE - TKE_target) / TKE_target * G * EPS_target
 
   end subroutine compute_stats
 
@@ -149,6 +146,26 @@ contains
 
     ! gravity
     lp%gravity(:) = (/ -ec_params(7), 0.0_WP, 0.0_WP /)
+
+    ! store parameters that are difficult to access for reference elsewhere
+    TKE_target = ec_params(3); EPS_target = ec_params(4);
+    nu = ec_params(5); dp = ec_params(6);
+
+    ! print current parameters
+    print_statistics: block
+      use string, only: str_long
+      use messager, only: log
+      character(len=str_long) :: message
+
+      if (cfg%amroot) then
+        write(message,'("At t = ",e16.8," updated turbulent parameters to:")') time%t; call log(message);
+        write(message,'("    Fluid density: ",e12.6)') fs%rho; call log(message);
+        write(message,'("    Target TKE: ",e12.6)') TKE_target; call log(message);
+        write(message,'("    Target EPS: ",e12.6)') EPS_target; call log(message);
+        write(message,'("    Kinematic Viscosity: ",e12.6)') nu; call log(message);
+      end if
+
+    end block print_statistics
 
   end subroutine update_parameters
 
@@ -196,7 +213,7 @@ contains
       call param_read('Max iter',time%nmax)
       time%dtmin=1e3*epsilon(0.0_WP)
       time%dt=time%dtmax
-      time%itmax=1              ! fourier solver
+      time%itmax=2
     end block initialize_timetracker
 
     ! Initialize timers
@@ -221,7 +238,7 @@ contains
 
       ec_evt = threshold_event(time=time, name='EC output')
       call ec%get_next_params(ec_params, ec_done)
-      if (ec_done) call die("It was over before it started.")
+      if (ec_done) call die("[EC] It was over before it started.")
 
       call ec%get_interval(interval)
       ec_evt%tnext = interval
@@ -238,7 +255,7 @@ contains
       ! Create flow solver
       fs=incomp(cfg=cfg,name='NS solver')
       ! Assign constant viscosity
-      fs%visc(:,:,:) = ec_params(5)
+      fs%visc(:,:,:) = ec_params(1) * ec_params(5)
       ! Prepare and configure pressure solver
       ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
       ! Setup the solver
@@ -299,8 +316,7 @@ contains
       call lp%sync()
 
       ! Get initial particle volume fraction
-      !call lp%update_VF()
-      lp%VF(:,:,:) = 0.0_WP
+      call lp%update_VF()
 
     end block initialize_lpt
 
@@ -353,6 +369,9 @@ contains
       ! Calculate cell-centered velocities and divergence
       call fs%interp_vel(Ui,Vi,Wi)
       call fs%get_div()
+
+      ! update parameters to print logging information
+      call update_parameters()
 
     end block initialize_velocity
 
@@ -480,8 +499,9 @@ contains
 
   !> Time integrate our problem
   subroutine simulation_run
-    use messager, only: die
-    use parallel, only: parallel_time
+    use messager,            only: die
+    use parallel,            only: parallel_time
+    use estimclosures_class, only: FORCE_TIMESCALE
     implicit none
 
     ! Perform time integration
@@ -495,6 +515,8 @@ contains
         ! Increment time
         call fs%get_cfl(time%dt,time%cfl)
         call time%adjust_dt()
+        time%dt = min(time%dt, FORCE_TIMESCALE / G)
+        time%dt = min(time%dt, sqrt(nu / max(EPS, EPSp)))
         call time%increment()
 
         ! Remember old velocity
@@ -528,17 +550,11 @@ contains
           ! Add linear forcing term: Bassenne et al. (2016)
           wt_force%time_in=parallel_time()
           ! we have stats from the previous step; they haven't changed
-          !TODO turning this on while debugging
-          call compute_stats()
+          !call compute_stats()
           linear_forcing: block
-            use estimclosures_class, only: FORCE_TIMESCALE
-            use messager,            only: die
-            real(WP) :: A, Gdtau
-            Gdtau =  G / FORCE_TIMESCALE
-            if (Gdtau**(-1).lt.time%dt) call die("[linear_forcing] &
-              &Controller time constant less than timestep")
+            real(WP) :: A
             ! - Eq. (7) (forcing constant TKE)
-            A = (EPSp - Gdtau * (TKE - ec_params(3))) / (2.0_WP * TKE) * fs%rho
+            A = (EPSp - (G / FORCE_TIMESCALE) * (TKE - TKE_target)) / (2.0_WP * TKE) * fs%rho
             ! update residuals
             resU = resU + time%dt * (fs%U - meanU) * A
             resV = resV + time%dt * (fs%V - meanV) * A
@@ -592,7 +608,7 @@ contains
           call ens_out%write_data(time%t)
         end if
 
-        ! Perform and output monitoring
+        ! Output monitoring
         call fs%get_max()
         call lp%get_max()
         call mfile%write()

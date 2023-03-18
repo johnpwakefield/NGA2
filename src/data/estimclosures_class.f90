@@ -30,7 +30,7 @@ module estimclosures_class
   integer, parameter :: FLT_GAUSSIAN = 1
 
   !> mesh spacing to parameter conversion
-  real(WP), parameter :: ETAODX = 0.5_WP
+  real(WP), parameter :: ETAODX = 0.4_WP
 
   !> parameter primitive quantities
   real(WP), parameter :: RHOF = 1.0_WP
@@ -375,8 +375,11 @@ contains
     ! increment first coord if we are done with current point
     ec%curr_statpoint = ec%curr_statpoint + 1
     if (ec%curr_statpoint .gt. ec%data_per_statpoint) then
+      if (ec%sim_pg%amRoot) write(*,*) "EC moving to new params"
       ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
       ec%curr_statpoint = 1
+    else
+      if (ec%sim_pg%amroot) write(*,*) "EC computing datapoint ", ec%curr_statpoint, " with old params"
     end if
 
     ! if this pushes it past its bounds, increment the next coordinate instead
@@ -391,6 +394,7 @@ contains
 
     ! get nondimensional values
     ec%nondim(:) = ec%pmin(:) + (ec%Icurr(:) - 1) * ec%pspacing(:)
+    if (ec%sim_pg%amroot) write(*,*) "EC nondim params: ", ec%nondim
 
     ! check to make sure we didn't make a mistake
     if (any(ec%nondim - 1e2_WP * epsilon(1.0_WP) .gt. ec%pmax)) call die('[EC]&
@@ -411,11 +415,13 @@ contains
     ! particle and gravity parameters
     ec%params(6) = (6 * ec%sim_pg%vol_total * ec%nondim(3) / (pi * ec%Np))**(1.0_WP / 3)
     ec%params(2) = ec%params(1) * 18 * ec%nondim(2) * sqrt(ec%params(5)**3 / ec%params(4)) / ec%params(6)**2
-    ec%params(7) = ec%params(2) * ec%params(6)**2 / (18 * ec%params(1) * ec%params(5))
+    ec%params(7) = 18 * ec%params(1) / ec%params(2) * (ec%params(5)**5 * ec%params(4) / ec%params(6)**8)**0.25_WP
 
     ! log change if we moved to new parameters
     if (ec%curr_statpoint .eq. 1 .and. ec%sim_pg%amRoot) then
-      write(message,'("[EC] changed to new param array: ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%params
+      write(message,'("[EC] changed to new param array (dimensional): ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%params
+      call log(message)
+      write(message,'("[EC] changed to new param array (nondimensional): ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%nondim
       call log(message)
     end if
 
@@ -433,8 +439,10 @@ contains
 
     if (ec%curr_statpoint .eq. 1) then
       if (all(ec%Icurr(:) .eq. 1)) then             ! new sim
+        if (ec%sim_pg%amroot) write(*,*) "[EC] using new sim burnin"
         interval = interval * ec%sim_burnin_mult
       else                                          ! new params
+        if (ec%sim_pg%amroot) write(*,*) "[EC] using new params burnin"
         interval = interval * ec%param_burnin_mult
       end if
     end if

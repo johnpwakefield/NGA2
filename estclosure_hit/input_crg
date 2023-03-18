@@ -6,30 +6,30 @@ Lx :	6.2832
 nx :	128 128 128
 
 # Particle Parameters
-Number of particles :   0
+Number of particles :   1200000
 
 # Steady-state (forcing) parameters
 Forcing constant :      50.0
 
 # Parameter sweep
-EC min Relambda : 55.0
+EC min Relambda : 20.0
 EC max Relambda : 55.0
-EC num Relambda : 1
+EC num Relambda : 8
 EC min Stk      : 0.25
 EC max Stk      : 2.0
 EC num Stk      : 8
 EC min Wovk     : 0.0
 EC max Wovk     : 0.0
 EC num Wovk     : 1
-EC min vf       : 1e-16
-EC max vf       : 1e-16
-EC num vf       : 5
+EC min vf       : 1e-8
+EC max vf       : 1e-4
+EC num vf       : 9
 EC data per statpoint : 8
 
 # data collection parameters
 EC integral timescales :    01.0
-EC new sim multiplier :     20.0
-EC new params multiplier :  04.0
+EC new sim multiplier :     12.0
+EC new params multiplier :  02.0
 
 # EC Parameters
 EC FFT mesh       : 256 256 256

@@ -275,7 +275,7 @@ contains
       end if
     end do
 
-  end function ecmesh_from_args 
+  end function ecmesh_from_args
 
   ! assumes out_fname, type, num_params, params are set
   ! assumes fft has been setup

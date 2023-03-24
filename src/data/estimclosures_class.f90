@@ -115,6 +115,7 @@ module estimclosures_class
   type, extends(estimclosures) :: estimclosures_mesh
     ! nondim mesh info
     real(WP), dimension(4) :: pmin, pmax, pspacing
+    logical, dimension(4) :: plog
     integer, dimension(4) :: Icurr, Imax, Idir
     integer :: curr_statpoint, data_per_statpoint
     ! primitive quantities that are constant (but not parameters)
@@ -249,15 +250,19 @@ contains
     call param_read('EC min Relambda', ec%pmin(1))
     call param_read('EC max Relambda', ec%pmax(1))
     call param_read('EC num Relambda', ec%Imax(1))
+    call param_read('EC log Relambda', ec%plog(1))
     call param_read('EC min Stk',      ec%pmin(2))
     call param_read('EC max Stk',      ec%pmax(2))
     call param_read('EC num Stk',      ec%Imax(2))
+    call param_read('EC log Stk',      ec%plog(2))
     call param_read('EC min Wovk',     ec%pmin(4))
     call param_read('EC max Wovk',     ec%pmax(4))
     call param_read('EC num Wovk',     ec%Imax(4))
+    call param_read('EC log Wovk',     ec%plog(4))
     call param_read('EC min vf',       ec%pmin(3))
     call param_read('EC max vf',       ec%pmax(3))
     call param_read('EC num vf',       ec%Imax(3))
+    call param_read('EC log vf',       ec%plog(3))
     call param_read('EC data per statpoint', ec%data_per_statpoint)
 
     ! make sure the largest requirest Relambda is representable on the mesh
@@ -268,10 +273,18 @@ contains
     ! init mesh
     ec%Icurr(:) = 1; ec%Idir(:) = +1; ec%curr_statpoint = 0;
     do n = 1, 4
-      if (ec%Imax(n) .gt. 1) then
-        ec%pspacing(n) = (ec%pmax(n) - ec%pmin(n)) / (ec%Imax(n) - 1)
+      if (ec%plog(n)) then
+        if (ec%Imax(n) .gt. 1) then
+          ec%pspacing(n) = log(ec%pmax(n) / ec%pmin(n)) / (ec%Imax(n) - 1)
+        else
+          ec%pspacing(n) = 1.0_WP
+        end if
       else
-        ec%pspacing(n) = 0.0_WP
+        if (ec%Imax(n) .gt. 1) then
+          ec%pspacing(n) = (ec%pmax(n) - ec%pmin(n)) / (ec%Imax(n) - 1)
+        else
+          ec%pspacing(n) = 0.0_WP
+        end if
       end if
     end do
 
@@ -393,7 +406,13 @@ contains
     end do
 
     ! get nondimensional values
-    ec%nondim(:) = ec%pmin(:) + (ec%Icurr(:) - 1) * ec%pspacing(:)
+    do n = 1, 4
+      if (ec%plog(n)) then
+        ec%nondim(n) = ec%pmin(n) * ec%pspacing(n)**(ec%Icurr(n) - 1)
+      else
+        ec%nondim(n) = ec%pmin(n) + (ec%Icurr(n) - 1) * ec%pspacing(n)
+      end if
+    end do
     if (ec%sim_pg%amroot) write(*,*) "EC nondim params: ", ec%nondim
 
     ! check to make sure we didn't make a mistake

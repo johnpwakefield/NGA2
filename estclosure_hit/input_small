@@ -1,29 +1,33 @@
 # Parallelization
-Partition :	4 4 1
+Partition :	1 4 1
 
 # Mesh definition
 Lx :	1.0
-nx :	64
+nx :	32 32 32
 
 # Particle Parameters
 Number of particles :           20000
 
 # Steady-state (forcing) parameters
-Forcing constant : 80.0
+Forcing constant : 60.0
 
 # Parameter sweep
 EC min Relambda : 08.0
 EC max Relambda : 20.0
 EC num Relambda : 3
+EC log Relambda : false
 EC min Stk      : 0.5
 EC max Stk      : 2.0
 EC num Stk      : 4
+EC log Stk      : false
 EC min Wovk     : 0.0
 EC max Wovk     : 0.0
 EC num Wovk     : 1
+EC log Wovk     : false
 EC min vf       : 1e-7
-EC max vf       : 1e-7
-EC num vf       : 1
+EC max vf       : 1e-5
+EC num vf       : 3
+EC log vf       : true
 EC data per statpoint : 2
 
 # data collection parameters

@@ -2,29 +2,29 @@
 Partition :	4 8 1
 
 # Mesh definition
-Lx :	6.2832
+Lx :	1.0
 nx :	128 128 128
 
 # Particle Parameters
 Number of particles :   1200000
 
 # Steady-state (forcing) parameters
-Forcing constant :      50.0
+Forcing constant :      42.0
 
 # Parameter sweep
-EC min Relambda : 20.0
+EC min Relambda : 15.0
 EC max Relambda : 55.0
-EC num Relambda : 8
-EC min Stk      : 0.25
-EC max Stk      : 2.0
+EC num Relambda : 4
+EC min Stk      : 0.5
+EC max Stk      : 4.0
 EC num Stk      : 8
 EC min Wovk     : 0.0
-EC max Wovk     : 0.0
-EC num Wovk     : 1
+EC max Wovk     : 2.0
+EC num Wovk     : 5
 EC min vf       : 1e-8
 EC max vf       : 1e-4
-EC num vf       : 9
-EC data per statpoint : 8
+EC num vf       : 5
+EC data per statpoint : 4
 
 # data collection parameters
 EC integral timescales :    01.0

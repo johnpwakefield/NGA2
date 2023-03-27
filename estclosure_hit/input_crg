@@ -14,16 +14,20 @@ Forcing constant :      42.0
 # Parameter sweep
 EC min Relambda : 15.0
 EC max Relambda : 55.0
-EC num Relambda : 4
+EC num Relambda : 3
+EC log Relambda : false
 EC min Stk      : 0.5
 EC max Stk      : 4.0
 EC num Stk      : 8
+EC log Stk      : false
 EC min Wovk     : 0.0
-EC max Wovk     : 2.0
-EC num Wovk     : 5
+EC max Wovk     : 3.0
+EC num Wovk     : 3
+EC log Wovk     : false
 EC min vf       : 1e-8
 EC max vf       : 1e-4
-EC num vf       : 5
+EC num vf       : 3
+EC log vf       : true
 EC data per statpoint : 4
 
 # data collection parameters

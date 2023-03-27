@@ -12,17 +12,17 @@ Number of particles :           20000
 Forcing constant : 60.0
 
 # Parameter sweep
-EC min Relambda : 08.0
+EC min Relambda : 10.0
 EC max Relambda : 20.0
-EC num Relambda : 3
+EC num Relambda : 2
 EC log Relambda : false
 EC min Stk      : 0.5
-EC max Stk      : 2.0
-EC num Stk      : 4
+EC max Stk      : 1.5
+EC num Stk      : 3
 EC log Stk      : false
 EC min Wovk     : 0.0
-EC max Wovk     : 0.0
-EC num Wovk     : 1
+EC max Wovk     : 1.0
+EC num Wovk     : 2
 EC log Wovk     : false
 EC min vf       : 1e-7
 EC max vf       : 1e-5
@@ -31,9 +31,9 @@ EC log vf       : true
 EC data per statpoint : 2
 
 # data collection parameters
-EC integral timescales :    0.10
-EC new sim multiplier :     12.0
-EC new params multiplier :  04.0
+EC integral timescales :    00.1
+EC new sim multiplier :     02.0
+EC new params multiplier :  00.4
 
 # EC Parameters
 EC FFT mesh       : 256 256 256

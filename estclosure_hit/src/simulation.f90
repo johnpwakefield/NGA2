@@ -25,7 +25,7 @@ module simulation
 
   ! particles
   type(lpt), public :: lp
-  real(WP), dimension(:,:,:), allocatable :: rho
+  real(WP), dimension(:,:,:), allocatable :: rho, sx, sy, sz
 
   !> Ensight postprocessing
   type(partmesh)       :: pmesh
@@ -60,7 +60,7 @@ module simulation
 
   !> For monitoring
   real(WP) :: Re_lambda, EPS_ratio, TKE_ratio, eta, ell_ratio, dx_eta,        &
-    nondimtime, permissible_eps_err
+    nondimtime, permissible_eps_err, Stk, phiinf, Wovk
 
   !> Wallclock time for monitoring
   type :: timer; real(WP) :: time_in, time, percent; end type timer
@@ -70,8 +70,9 @@ contains
 
   !> Compute turbulence stats
   subroutine compute_stats()
-    use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-    use parallel, only: MPI_REAL_WP
+    use mathtools, only: PI
+    use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+    use parallel,  only: MPI_REAL_WP
     real(WP) :: myTKE, myEPS, myEPSp
     integer :: i, j, k, ierr
 
@@ -124,6 +125,11 @@ contains
     nondimtime = time%t / (2 * TKE_target) * (3 * EPS_target)
     permissible_eps_err = (TKE - TKE_target) / TKE_target * G * EPS_target
 
+    ! nondimensional particle quantities
+    Stk = ec_params(2) / ec_params(1) * ec_params(6)**2 / (18 * eta**2)
+    phiinf = lp%np * PI * ec_params(6)**3 / (6 * cfg%vol_total)
+    Wovk = ec_params(2) / ec_params(1) * ec_params(6)**2 * eta / (18 * nu**2)
+
   end subroutine compute_stats
 
   !> params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
@@ -135,6 +141,7 @@ contains
     fs%rho = ec_params(1)
     rho(:,:,:) = fs%rho
     fs%visc(:,:,:) = ec_params(1) * ec_params(5)
+    sx(:,:,:) = 0.0_WP; sy(:,:,:) = 0.0_WP; sz(:,:,:) = 0.0_WP;
 
     ! particle parameters
     lp%filter_width = FILTER_MESH_RATIO * cfg%min_meshsize
@@ -261,8 +268,11 @@ contains
       ! Setup the solver
       call fs%setup(pressure_solver=ps)
       fs%rho = ec_params(1)
-      ! Set up constant density array for lpt
+      ! Set up constant arrays for lpt
       allocate(rho(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(sx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(sy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      allocate(sz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       rho(:,:,:) = ec_params(1)
 
     end block create_and_initialize_flow_solver
@@ -642,7 +652,8 @@ contains
       ec_next: block
         real(WP) :: interval
 
-        call ec%compute_statistics(time%t, time%n, lp)
+        !TODO use fluid stress
+        call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
         call ec%get_next_params(ec_params, ec_done)
         call ec%get_interval(interval)
         ec_evt%tnext = ec_evt%tnext + interval

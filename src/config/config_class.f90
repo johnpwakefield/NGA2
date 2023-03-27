@@ -15,7 +15,7 @@ module config_class
       ! Some more metrics
       real(WP), dimension(:,:,:), allocatable :: vol           !< Local cell volume
       real(WP), dimension(:,:,:), allocatable :: meshsize      !< Local effective cell size
-      real(WP) :: min_meshsize, max_meshsize                    !< Global minimum and max mesh size
+      real(WP) :: min_meshsize, max_meshsize                   !< Global minimum and max mesh size
       
       ! Geometry
       real(WP), dimension(:,:,:), allocatable :: VF            !< Volume fraction info (VF=1 is fluid, VF=0 is wall)
@@ -247,7 +247,7 @@ contains
       real(WP) :: Sp
       real(WP), dimension(3), intent(in) :: pos
       integer, intent(in) :: i0,j0,k0
-      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: S     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(in) :: S     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       character(len=1), intent(in) :: bc    !< Supports n for Neumann, d for Dirichlet, 0 for zero Dirichlet
       integer :: i,j,k,ni,nj,nk
       real(WP) :: wx1,wy1,wz1

@@ -114,17 +114,19 @@ module estimclosures_class
     procedure :: destruct => ec_destruct
   end type estimclosures
 
+  ! first entry is statpoint, 2-5 are nondim params, 6 is sweep
   type, extends(estimclosures) :: estimclosures_mesh
     ! nondim mesh info
-    real(WP), dimension(4) :: pmin, pmax, pspacing
-    logical, dimension(4) :: plog
-    integer, dimension(4) :: Icurr, Imax, Idir
-    integer :: curr_statpoint, data_per_statpoint
+    real(WP), dimension(2:5) :: pmin, pmax, pspacing
+    logical, dimension(2:5)  :: plog
+    integer, dimension(6)    :: Icurr, Imax, Idir
+    integer :: interval_number, interval_total
     ! primitive quantities that are constant (but not parameters)
     integer :: Np
   contains
     procedure :: get_next_params
     procedure :: get_interval
+    procedure :: params_are_new
   end type estimclosures_mesh
 
   interface estimclosures_mesh; procedure ecmesh_from_args; end interface
@@ -243,32 +245,33 @@ contains
     call ec%init(cfg)
 
     ! read params
-    call param_read('EC min Relambda', ec%pmin(1))
-    call param_read('EC max Relambda', ec%pmax(1))
-    call param_read('EC num Relambda', ec%Imax(1))
-    call param_read('EC log Relambda', ec%plog(1))
-    call param_read('EC min Stk',      ec%pmin(2))
-    call param_read('EC max Stk',      ec%pmax(2))
-    call param_read('EC num Stk',      ec%Imax(2))
-    call param_read('EC log Stk',      ec%plog(2))
-    call param_read('EC min Wovk',     ec%pmin(4))
-    call param_read('EC max Wovk',     ec%pmax(4))
-    call param_read('EC num Wovk',     ec%Imax(4))
-    call param_read('EC log Wovk',     ec%plog(4))
-    call param_read('EC min vf',       ec%pmin(3))
-    call param_read('EC max vf',       ec%pmax(3))
-    call param_read('EC num vf',       ec%Imax(3))
-    call param_read('EC log vf',       ec%plog(3))
-    call param_read('EC data per statpoint', ec%data_per_statpoint)
+    call param_read('EC min Relambda',       ec%pmin(2))
+    call param_read('EC max Relambda',       ec%pmax(2))
+    call param_read('EC num Relambda',       ec%Imax(2))
+    call param_read('EC log Relambda',       ec%plog(2))
+    call param_read('EC min Stk',            ec%pmin(3))
+    call param_read('EC max Stk',            ec%pmax(3))
+    call param_read('EC num Stk',            ec%Imax(3))
+    call param_read('EC log Stk',            ec%plog(3))
+    call param_read('EC min vf',             ec%pmin(4))
+    call param_read('EC max vf',             ec%pmax(4))
+    call param_read('EC num vf',             ec%Imax(4))
+    call param_read('EC log vf',             ec%plog(4))
+    call param_read('EC min Wovk',           ec%pmin(5))
+    call param_read('EC max Wovk',           ec%pmax(5))
+    call param_read('EC num Wovk',           ec%Imax(5))
+    call param_read('EC log Wovk',           ec%plog(5))
+    call param_read('EC data per statpoint', ec%Imax(1))
+    call param_read('EC num sweeps',         ec%Imax(6))
 
     ! make sure the largest requirest Relambda is representable on the mesh
     Relammax = sqrt(15.0_WP) * (ec%linf / ec%etamin)**(2.0_WP / 3)
-    if (ec%pmax(1) .gt. Relammax) call die("[EC] requested Relambda is greater&
+    if (ec%pmax(2) .gt. Relammax) call die("[EC] requested Relambda is greater&
       & than what is possible to resolve on mesh")
 
     ! init mesh
-    ec%Icurr(:) = 1; ec%Idir(:) = +1; ec%curr_statpoint = 0;
-    do n = 1, 4
+    ec%Icurr(:) = 1; ec%Idir(:) = +1;
+    do n = 2, 5
       if (ec%plog(n)) then
         if (ec%Imax(n) .gt. 1) then
           ec%pspacing(n) = exp(log(ec%pmax(n) / ec%pmin(n)) / (ec%Imax(n) - 1))
@@ -283,6 +286,9 @@ contains
         end if
       end if
     end do
+    ec%Icurr(1) = 0
+    ec%interval_number = 0
+    ec%interval_total = product(ec%Imax)
 
   end function ecmesh_from_args
 
@@ -391,23 +397,17 @@ contains
     character(len=str_long) :: message
 
     ! check if we are done
-    done = ec%curr_statpoint .gt. ec%data_per_statpoint                       &
-      .and. all(ec%Icurr .eq. ec%Imax)
+    done = ec%interval_number .eq. ec%interval_total
 
-    ! increment first coord if we are done with current point
-    ec%curr_statpoint = ec%curr_statpoint + 1
-    if (ec%curr_statpoint .gt. ec%data_per_statpoint) then
-      if (ec%sim_pg%amRoot) write(*,*) "[EC] moving to new params"
-      ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
-      ec%curr_statpoint = 1
-    else
-      if (ec%sim_pg%amroot) write(*,*) "[EC] computing datapoint ",           &
-        ec%curr_statpoint, " with old params"
-    end if
+    ! increment number of total intervals
+    ec%interval_number = ec%interval_number + 1
+
+    ! increment first coord
+    ec%Icurr(1) = ec%Icurr(1) + ec%Idir(1)
 
     ! if this pushes it past its bounds, increment the next coordinate instead
     ! and change directions of previous coordinate
-    do n = 1, 3
+    do n = 1, 5
       if (ec%Icurr(n) .lt. 1 .or. ec%Icurr(n) .gt. ec%Imax(n)) then
         ec%Icurr(n) = ec%Icurr(n) - ec%Idir(n)
         ec%Icurr(n+1) = ec%Icurr(n+1) + ec%Idir(n+1)
@@ -416,20 +416,27 @@ contains
     end do
 
     ! get nondimensional values
-    do n = 1, 4
+    do n = 2, 5
       if (ec%plog(n)) then
-        ec%nondim(n) = ec%pmin(n) * ec%pspacing(n)**(ec%Icurr(n) - 1)
+        ec%nondim(n-1) = ec%pmin(n) * ec%pspacing(n)**(ec%Icurr(n) - 1)
       else
-        ec%nondim(n) = ec%pmin(n) + (ec%Icurr(n) - 1) * ec%pspacing(n)
+        ec%nondim(n-1) = ec%pmin(n) + (ec%Icurr(n) - 1) * ec%pspacing(n)
       end if
     end do
-    if (ec%sim_pg%amroot) write(*,*) "[EC] nondim params: ", ec%nondim
+
+    ! print values if not done
+    if (ec%sim_pg%amroot .and. .not. done) then
+      write(*,*) "[EC] index: ", ec%Icurr
+      write(*,*) "[EC] nondim params: ", ec%nondim
+    end if
 
     ! check to make sure we didn't make a mistake
-    if (any(ec%nondim - 1e3_WP * epsilon(1.0_WP) .gt. ec%pmax)) call die('[EC]&
-      & big whoops')
-    if (any(ec%nondim + 1e3_WP * epsilon(1.0_WP) .lt. ec%pmin)) call die('[EC]&
-      & little whoops')
+    if (.not. done) then
+      if (any(ec%nondim - 1e3_WP * epsilon(1.0_WP) .gt. ec%pmax))             &
+        call die('[EC] big whoops')
+      if (any(ec%nondim + 1e3_WP * epsilon(1.0_WP) .lt. ec%pmin))             &
+        call die('[EC] little whoops')
+    end if
 
     ! fluid parameters
     ! using the current approach viscosity is fixed throughout; it is computed
@@ -447,10 +454,13 @@ contains
     ec%params(7) = 18 * ec%params(1) / ec%params(2) * (ec%params(5)**5 * ec%params(4) / ec%params(6)**8)**0.25_WP
 
     ! log change if we moved to new parameters
-    if (ec%curr_statpoint .eq. 1 .and. ec%sim_pg%amRoot) then
-      write(message,'("[EC] changed to new param array (dimensional): ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%params
+    if (ec%params_are_new() .and. ec%sim_pg%amRoot) then
+      write(message,'("[EC] changed to new param array (dimensional): ",e12.5,&
+        &", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') &
+        ec%params
       call log(message)
-      write(message,'("[EC] changed to new param array (nondimensional): ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%nondim
+      write(message,'("[EC] changed to new param array (nondimensional): ",e12&
+        &.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%nondim
       call log(message)
     end if
 
@@ -459,6 +469,16 @@ contains
 
   end subroutine get_next_params
 
+  function params_are_new(ec) result(new)
+    implicit none
+    class(estimclosures_mesh), intent(in) :: ec
+    logical :: new
+
+    new = all((ec%Icurr .eq. 1       .and. ec%Idir .eq. +1) .or.              &
+              (ec%Icurr .eq. ec%Imax .and. ec%Idir .eq. -1)      )
+
+  end function params_are_new
+
   subroutine get_interval(ec, interval)
     implicit none
     class(estimclosures_mesh), intent(in) :: ec
@@ -466,7 +486,7 @@ contains
 
     interval = ec%interval_tinfs * FORCE_TIMESCALE
 
-    if (ec%curr_statpoint .eq. 1) then
+    if (ec%params_are_new()) then
       if (all(ec%Icurr(:) .eq. 1)) then             ! new sim
         if (ec%sim_pg%amroot) write(*,*) "[EC] using new sim burnin"
         interval = interval * ec%sim_burnin_mult

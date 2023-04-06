@@ -28,6 +28,7 @@ EC min vf       : 1e-8
 EC max vf       : 1e-4
 EC num vf       : 3
 EC log vf       : true
+EC num sweeps   : 2
 EC data per statpoint : 4
 
 # data collection parameters

@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 4 1
+Partition :	4 4 1
 
 # Mesh definition
 Lx :	1.0
@@ -28,12 +28,13 @@ EC min vf       : 1e-7
 EC max vf       : 1e-5
 EC num vf       : 3
 EC log vf       : true
+EC num sweeps   : 3
 EC data per statpoint : 2
 
 # data collection parameters
-EC integral timescales :    00.1
-EC new sim multiplier :     02.0
-EC new params multiplier :  00.4
+EC integral timescales :    0.002
+EC new sim multiplier :     0.008
+EC new params multiplier :  0.006
 
 # EC Parameters
 EC FFT mesh       : 256 256 256

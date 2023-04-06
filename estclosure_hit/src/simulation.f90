@@ -128,7 +128,8 @@ contains
     ! nondimensional particle quantities
     Stk = ec_params(2) / ec_params(1) * ec_params(6)**2 / (18 * eta**2)
     phiinf = lp%np * PI * ec_params(6)**3 / (6 * cfg%vol_total)
-    Wovk = ec_params(2) / ec_params(1) * ec_params(6)**2 * eta / (18 * nu**2)
+    Wovk = ec_params(7) * ec_params(2) / ec_params(1) * ec_params(6)**2 * eta &
+      / (18 * nu**2)
 
   end subroutine compute_stats
 

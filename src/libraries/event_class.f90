@@ -63,7 +63,6 @@ contains
       ! Set the event name
       if (present(name)) self%name=trim(adjustl(name))
       ! Default to 0 periods for event
-      ! sentinel values need to be zero since fortran doesn't short-circuit
       self%nper=-1
       self%tper=-1.0_WP
 

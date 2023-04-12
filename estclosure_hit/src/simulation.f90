@@ -654,7 +654,7 @@ contains
         real(WP) :: interval
 
         !TODO use fluid stress
-        call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
+        call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
         call ec%get_next_params(ec_params, ec_done)
         call ec%get_interval(interval)
         ec_evt%tnext = ec_evt%tnext + interval

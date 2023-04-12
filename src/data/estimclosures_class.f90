@@ -50,6 +50,7 @@ module estimclosures_class
     integer :: step, sweepnum
     real(WP), dimension(4) :: nd_target   ! nondimensional target params
     real(WP), dimension(4) :: nd_actual   ! actual achieved nondimensional params
+    real(WP), dimension(3) :: dimturb     ! urms, eta, nu
     real(WP), dimension(NUM_S) :: S       ! spatial
     real(WP), dimension(NUM_M) :: M       ! microscopic
     real(WP), dimension(NUM_G) :: G       ! enhanced settling
@@ -320,6 +321,9 @@ contains
     call flt%mon%add_column(flt%d%nd_actual(2), 'act_Stk'   )
     call flt%mon%add_column(flt%d%nd_actual(3), 'act_phiinf')
     call flt%mon%add_column(flt%d%nd_actual(4), 'act_Wovk'  )
+    call flt%mon%add_column(flt%d%dimturb(1), 'urms')
+    call flt%mon%add_column(flt%d%dimturb(2), 'eta' )
+    call flt%mon%add_column(flt%d%dimturb(3), 'nu'  )
     call flt%mon%add_column(flt%d%S( 1),  'PB'    )
     call flt%mon%add_column(flt%d%S( 2),  'PC2'   )
     call flt%mon%add_column(flt%d%S( 3),  'UBx'   )
@@ -533,14 +537,14 @@ contains
 
   end subroutine ec_destruct
 
-  subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, time, step, ps, rho, visc, U, V, W, sx, sy, sz)
+  subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time, step, ps, rho, visc, U, V, W, sx, sy, sz)
     use mpi_f08,    only:  MPI_CHARACTER, MPI_INTEGER, mpi_reduce, mpi_allreduce, MPI_SUM
     use parallel,   only: MPI_REAL_WP
     use lpt_class,  only: part
     use messager,   only: die
     implicit none
     class(estimclosures), intent(inout) :: ec
-    real(WP), intent(in)  :: Re_lambda, Stk, phiinf, Wovk, time
+    real(WP), intent(in)  :: Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time
     integer, intent(in) :: step
     class(lpt), intent(inout) :: ps
     real(WP), dimension(ec%sim_pg%imino_:,ec%sim_pg%jmino_:,ec%sim_pg%kmino_:), intent(in) :: rho, visc, U, V, W, sx, sy, sz
@@ -623,6 +627,7 @@ contains
       ! store target fluid and particle statistics
       ec%filters(i)%d%nd_target(:) = ec%nondim(:)
       ec%filters(i)%d%nd_actual(:) = (/ Re_lambda, Stk, phiinf, Wovk /)
+      ec%filters(i)%d%dimturb(:) = (/ urms, eta, nu /)
       ec%filters%d%G(1) = ec%params(2) / ec%params(1) * ec%params(6)**2 / (18 * ec%params(5))
       ec%filters(i)%d%G(4) = ec%params(7)
 

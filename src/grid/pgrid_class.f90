@@ -8,10 +8,6 @@ module pgrid_class
    implicit none
    private
    
-   !> Default parallelization strategy
-   character(len=str_medium), parameter :: defstrat='fewest_dir'
-   integer, parameter :: defmincell=4
-   
    ! Expose type/constructor/methods
    public :: pgrid
    

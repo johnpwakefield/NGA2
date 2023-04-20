@@ -203,9 +203,8 @@ contains
 
     ! Add Ensight output
     create_ensight: block
-      use ensight_class, only: add_rscalar
       use string, only: str_short
-      real(WP), dimension(:,:,:), pointer :: scl_ptr
+      real(WP), dimension(:,:,:), pointer :: ptr1, ptr2, ptr3
 
       ! create array to hold physical coordinates
       allocate(phys_out(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,        &
@@ -219,20 +218,18 @@ contains
       call param_read('Ensight output period', ens_evt%tper)
 
       ! Add variables to output
-      scl_ptr => phys_out(1,:,:,:)
-      call add_rscalar(ens_out, 'density', scl_ptr)
-      scl_ptr => phys_out(2,:,:,:)
-      call add_rscalar(ens_out, 'x_velocity', scl_ptr)
-      scl_ptr => phys_out(3,:,:,:)
-      call add_rscalar(ens_out, 'y_velocity', scl_ptr)
-      scl_ptr => phys_out(4,:,:,:)
-      call add_rscalar(ens_out, 'z_velocity', scl_ptr)
-      scl_ptr => phys_out(5,:,:,:)
-      call add_rscalar(ens_out, 'pressure', scl_ptr)
-      scl_ptr => fs%params(1,:,:,:)
-      call add_rscalar(ens_out, 'gamma', scl_ptr)
-      scl_ptr => phys_out(6,:,:,:)
-      call add_rscalar(ens_out, 'Ma', scl_ptr)
+      ptr1 => phys_out(1,:,:,:)
+      call ens_out%add_scalar('density', ptr1)
+      ptr1 => phys_out(2,:,:,:)
+      ptr2 => phys_out(3,:,:,:)
+      ptr3 => phys_out(4,:,:,:)
+      call ens_out%add_vector('velocity', ptr1, ptr2, ptr3)
+      ptr1 => phys_out(5,:,:,:)
+      call ens_out%add_scalar('pressure', ptr1)
+      ptr1 => fs%params(1,:,:,:)
+      call ens_out%add_scalar('gamma', ptr1)
+      ptr1 => phys_out(6,:,:,:)
+      call ens_out%add_scalar('Ma', ptr1)
 
       ! Output to ensight
       if (ens_evt%occurs()) then
@@ -244,7 +241,6 @@ contains
 
     ! Create a monitor file
     create_monitor: block
-      use monitor_class, only: add_column_real
       use string, only: str_short
       real(WP), pointer :: real_ptr
 
@@ -262,25 +258,25 @@ contains
       !call mfile%add_column(real_ptr, fields(i:i)//'min')
       !call mfile%add_column(real_ptr, fields(i:i)//'max')
       real_ptr => fs%Umin(1)
-      call add_column_real(mfile, real_ptr, 'dens_min')
+      call mfile%add_column(real_ptr, 'dens_min')
       real_ptr => fs%Umax(1)
-      call add_column_real(mfile, real_ptr, 'dens_max')
+      call mfile%add_column(real_ptr, 'dens_max')
       real_ptr => fs%Umin(2)
-      call add_column_real(mfile, real_ptr, 'momx_min')
+      call mfile%add_column(real_ptr, 'momx_min')
       real_ptr => fs%Umax(2)
-      call add_column_real(mfile, real_ptr, 'momx_max')
+      call mfile%add_column(real_ptr, 'momx_max')
       real_ptr => fs%Umin(3)
-      call add_column_real(mfile, real_ptr, 'momy_min')
+      call mfile%add_column(real_ptr, 'momy_min')
       real_ptr => fs%Umax(3)
-      call add_column_real(mfile, real_ptr, 'momy_max')
+      call mfile%add_column(real_ptr, 'momy_max')
       real_ptr => fs%Umin(4)
-      call add_column_real(mfile, real_ptr, 'momz_min')
+      call mfile%add_column(real_ptr, 'momz_min')
       real_ptr => fs%Umax(4)
-      call add_column_real(mfile, real_ptr, 'momz_max')
+      call mfile%add_column(real_ptr, 'momz_max')
       real_ptr => fs%Umin(5)
-      call add_column_real(mfile, real_ptr, 'totE_min')
+      call mfile%add_column(real_ptr, 'totE_min')
       real_ptr => fs%Umax(5)
-      call add_column_real(mfile, real_ptr, 'totE_max')
+      call mfile%add_column(real_ptr, 'totE_max')
       call mfile%write()
 
       ! Create CFL monitor
@@ -297,15 +293,15 @@ contains
       call consfile%add_column(time%n, 'Timestep number')
       call consfile%add_column(time%t, 'Time')
       real_ptr => fs%Uint(1)
-      call add_column_real(consfile, real_ptr, 'dens_int')
+      call consfile%add_column(real_ptr, 'dens_int')
       real_ptr => fs%Uint(2)
-      call add_column_real(consfile, real_ptr, 'momx_int')
+      call consfile%add_column(real_ptr, 'momx_int')
       real_ptr => fs%Uint(3)
-      call add_column_real(consfile, real_ptr, 'momy_int')
+      call consfile%add_column(real_ptr, 'momy_int')
       real_ptr => fs%Uint(4)
-      call add_column_real(consfile, real_ptr, 'momz_int')
+      call consfile%add_column(real_ptr, 'momz_int')
       real_ptr => fs%Uint(5)
-      call add_column_real(consfile, real_ptr, 'totE_int')
+      call consfile%add_column(real_ptr, 'totE_int')
       call consfile%write()
 
     end block create_monitor
@@ -327,15 +323,15 @@ contains
       ! take step (Strang)
       call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
-      call fs%compute_dU_x(0.5 * time%dt)
+      call fs%calc_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
       call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
-      call fs%compute_dU_y(time%dt)
+      call fs%calc_dU_y(time%dt)
       fs%Uc = fs%Uc + fs%dU
       call fs%apply_bcond(time%t, time%dt)
       fs%dU(:, :, :, :) = 0.0_WP
-      call fs%compute_dU_x(0.5 * time%dt)
+      call fs%calc_dU_x(0.5 * time%dt)
       fs%Uc = fs%Uc + fs%dU
 
       ! Output to ensight

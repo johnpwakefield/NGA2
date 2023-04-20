@@ -1,19 +1,7 @@
 !>  MUSCL-type solver class
 !>  Provides support for various BC, generic hyperbolic structures
 !>
-!>  Originally written by John P Wakefield, December 2022
-!>
-!>  this file includes:
-!>
-!>    - module block
-!>        - function interfaces
-!>        - bc type
-!>        - solver class def
-!>        - system class defs
-!>    - contains (with headers containing exactly these phrases)
-!>        - standard interface class functions
-!>        - muscl-specific class functions
-!>        - limiter definitions
+!>  Originally written by John P Wakefield in December 2022.
 !>
 !>  When possible, helper functions immediately follow the class function that
 !>  calls them.
@@ -23,24 +11,12 @@ module muscl_class
   use string,         only: str_medium
   use config_class,   only: config
   use iterator_class, only: iterator
+  use hyperbolic,     only: limiter_ftype, eigenvals_ftype, rsolver_ftype, get_limiter
   implicit none
   private
 
   ! expose type/constructor/methods
-  public :: muscl, constructor, bcond
-
-  ! expose interfaces
-  public :: eigenvals_ftype, rsolver_ftype, limiter_ftype
-
-  ! limiter names
-  integer(1), parameter, public :: UPWIND   = 0_1
-  integer(1), parameter, public :: LAXWEND  = 1_1
-  integer(1), parameter, public :: BEAMWARM = 2_1
-  integer(1), parameter, public :: FROMM    = 3_1
-  integer(1), parameter, public :: MINMOD   = 4_1
-  integer(1), parameter, public :: SUPERBEE = 5_1
-  integer(1), parameter, public :: MC       = 6_1
-  integer(1), parameter, public :: VANLEER  = 7_1
+  public :: muscl, muscl_bc
 
   ! List of known available bcond types for this solver
   ! here 'right' means bcond direction +1
@@ -57,78 +33,49 @@ module muscl_class
   ! rs(:, 1)       left-going eigenvalues
   ! rs(:, 2)       right-going eigenvalues
   ! rs(:, 3)       wave strengths
-  ! rs(:, 4)       (projected) source strengths TODO remove these
+  ! rs(:, 4)       (projected) source strengths (only a good idea in 1d; commented below)
   ! rs(:, 5:(N+4)) (linearized) eigenvectors
 
-  interface
-    pure subroutine eigenvals_ftype(N, params, u, evals)
-      use precision, only: WP
-      implicit none
-      integer, intent(in) :: N
-      real(WP), dimension(:), intent(in) :: params
-      real(WP), dimension(N), intent(in) :: u
-      real(WP), dimension(N), intent(out) :: evals
-    end subroutine
-    pure subroutine rsolver_ftype(N, pl, ul, pr, ur, rs)
-      use precision, only: WP
-      implicit none
-      integer, intent(in) :: N
-      real(WP), dimension(:), intent(in) :: pl, pr
-      real(WP), dimension(N), intent(in) :: ul, ur
-      real(WP), dimension(:,:), intent(out) :: rs
-    end subroutine
-    pure function limiter_ftype(r) result(phi)
-      use precision, only: WP
-      implicit none
-      real(WP), intent(in) :: r
-      real(WP) :: phi
-    end function
-  end interface
-
   !> boundary conditions for the hyperbolic solver
-  type :: bcond
-    type(bcond), pointer :: next                              !< linked list of bconds
-    character(len=str_medium) :: name = 'UNNAMED_BCOND'       !< bcond name (default UNNAMED_BCOND)
-    integer(1) :: type                                        !< bcond type
-    type(iterator) :: itr                                     !< this is the iterator for the bcond
-    integer(1) :: dir                                         !< bcond direction 0-6
-  end type bcond
+  type :: muscl_bc
+    type(muscl_bc), pointer :: next                     !< linked list of bconds
+    character(len=str_medium) :: name = 'UNNAMED_BC'    !< bcond name (default UNNAMED_BCOND)
+    integer(1) :: type                                  !< bcond type
+    type(iterator) :: itr                               !< this is the iterator for the bcond
+    integer(1) :: dir                                   !< bcond direction 0-6
+  end type muscl_bc
 
   !> solver object definition
   type :: muscl
 
     ! config / pgrid object
-    class(config), pointer :: cfg                             !< config / pgrid information
+    class(config), pointer :: cfg                       !< config / pgrid information
 
     ! name
-    character(len=str_medium) :: name = 'UNNAMED_MUSCL'       !< solver name (default UNNAMED_MUSCL)
+    character(len=str_medium) :: name = 'MUSCL'         !< solver name
 
     ! system information
-    integer :: N                                              !< system dimension
-    integer :: P                                              !< number of parameters
+    integer :: N                                        !< system dimension
+    integer :: P                                        !< number of parameters
     procedure(eigenvals_ftype), pointer, nopass :: evals_x, evals_y, evals_z
     procedure(rsolver_ftype), pointer, nopass :: rsolv_x, rsolv_y, rsolv_z
     logical, dimension(:), allocatable :: vel_mask_x, vel_mask_y, vel_mask_z
 
     ! limiting
-    procedure(limiter_ftype), pointer, nopass :: limiter      !< limiter function
-    real(WP) :: upratio_divzero_eps                           !< softening epsilon for upwind ratio
+    procedure(limiter_ftype), pointer, nopass :: limiter!< limiter function
+    real(WP) :: upratio_divzero_eps                     !< softening epsilon for upwind ratio
 
     ! boundary condition list
-    integer :: nbc                                            !< number of bcond for our solver
-    !TODO mft
-    real(WP), dimension(:), allocatable :: mfr                !< mFR through each bcond
-    real(WP), dimension(:), allocatable :: area               !< area for each bcond
-    real(WP) :: correctable_area                              !< area of bcond that can be corrected
-    type(bcond), pointer :: first_bc                          !< list of bcond for our solver
+    integer :: nbc                                      !< number of bcond for our solver
+    type(muscl_bc), pointer :: first_bc                 !< list of bcond for our solver
 
     ! flow variables, parameter arrays
-    real(WP), dimension(:,:,:,:), pointer :: Uc, dU       !< state variables
-    real(WP), dimension(:,:,:,:), pointer :: params       !< params for evals/rsolver
+    real(WP), dimension(:,:,:,:), pointer :: Uc, dU     !< state variables
+    real(WP), dimension(:,:,:,:), pointer :: params     !< params for evals/rsolver
 
     !TODO get this working
     ! transsonic flags
-    !integer(1), dimension(:,:,:), allocatable :: trans        !< bitwise entropy violation check xyz
+    !integer(1), dimension(:,:,:), allocatable :: trans !< bitwise entropy violation check xyz
     !integer :: trans_total
     !logical :: have_trans_flags
 
@@ -137,34 +84,34 @@ module muscl_class
     integer(1), dimension(:,:,:), allocatable :: wavebcs
 
     ! CFL numbers
-    real(WP) :: CFL_x, CFL_y, CFL_z                       !< global CFL numbers (over dt)
-    real(WP) :: CFL_safety                                !< CFL modifier when using cached value
+    real(WP) :: CFL_x, CFL_y, CFL_z                     !< global CFL numbers (over dt)
+    real(WP) :: CFL_safety                              !< CFL modifier when using cached value
     logical :: have_CFL_x_estim, have_CFL_y_estim, have_CFL_z_estim
     logical :: have_CFL_x_exact, have_CFL_y_exact, have_CFL_z_exact
 
     ! monitoring quantities
-    real(WP), dimension(:), pointer :: Umin, Umax         !< state variable range
-    real(WP), dimension(:), pointer :: Uint               !< integral of state vars over domain
+    real(WP), dimension(:), pointer :: Umin, Umax       !< state variable range
+    real(WP), dimension(:), pointer :: Uint             !< integral of state vars over domain
     logical :: have_Urange
 
   contains
 
     ! standard interface
-    procedure :: print => muscl_print                         !< output solver to the screen
-    procedure :: add_bcond                                    !< add a boundary condition
-    procedure :: get_bcond                                    !< get a boundary condition
-    procedure :: apply_bcond                                  !< apply all boundary conditions
-    procedure :: get_cfl                                      !< get maximum CFL
-    procedure :: get_range                                    !< calculate min/max field values
-    procedure :: get_min => get_range                         !< compatibility
-    procedure :: get_max => get_range                         !< compatibility
-    !procedure :: get_mfr                                      !< mfr at ea bcond in last step
-    procedure :: compute_dU_x, compute_dU_y, compute_dU_z     !< take step
+    procedure :: print => muscl_print                   !< output solver to the screen
+    procedure :: add_bcond                              !< add a boundary condition
+    procedure :: get_bcond                              !< get a boundary condition
+    procedure :: apply_bcond                            !< apply all boundary conditions
+    procedure :: get_cfl                                !< get maximum CFL
+    procedure :: get_range                              !< calculate min/max field values
+    procedure :: get_min => get_range                   !< compatibility
+    procedure :: get_max => get_range                   !< compatibility
+    !procedure :: get_mfr                               !< mfr at ea bcond in last step
+    procedure :: calc_dU_x, calc_dU_y, calc_dU_z        !< take step
 
     ! muscl specific
     !TODO get this working
-    !procedure :: check_transonic                              !< check for transonic waves
-    procedure :: recalc_cfl                                   !< calculate maximum CFL
+    !procedure :: check_transonic                       !< check for transonic waves
+    procedure :: recalc_cfl                             !< calculate maximum CFL
 
   end type muscl
 
@@ -205,31 +152,11 @@ contains
     this%rsolv_x => rsolv_x; this%rsolv_y => rsolv_y; this%rsolv_z => rsolv_z;
 
     ! limiting
-    select case (lim)
-    case (UPWIND)
-      this%limiter => limiter_upwind
-    case (LAXWEND)
-      this%limiter => limiter_laxwend
-    case (BEAMWARM)
-      this%limiter => limiter_beamwarm
-    case (FROMM)
-      this%limiter => limiter_fromm
-    case (MINMOD)
-      this%limiter => limiter_minmod
-    case (SUPERBEE)
-      this%limiter => limiter_superbee
-    case (MC)
-      this%limiter => limiter_mc
-    case (VANLEER)
-      this%limiter => limiter_vanleer
-    case default
-      call die("could not find limiter")
-    end select
+    this%limiter => get_limiter(lim)
     this%upratio_divzero_eps = upratio_divzero_eps
 
-    ! boundary condition list
-    this%nbc = 0
-    this%first_bc => NULL()
+    ! initialize boundary condition list
+    this%nbc = 0; this%first_bc => NULL();
 
     ! get array sizes
     imino = this%cfg%imino_; imaxo = this%cfg%imaxo_;
@@ -289,7 +216,7 @@ contains
     integer(1), intent(in) :: type
     procedure(locator_gen_ftype) :: locator
     character(len=2), intent(in) :: dir
-    type(bcond), pointer :: new_bc
+    type(muscl_bc), pointer :: new_bc
     integer :: i, j, k, n
     integer(1) :: wbc
 
@@ -299,7 +226,7 @@ contains
     new_bc%type = type
     new_bc%itr = iterator(pg=this%cfg, name=new_bc%name, locator=locator)
     select case (lowercase(dir))
-    case ('c');                    new_bc%dir = 0_1
+    case ('c');              new_bc%dir = 0_1
     case ('-x', 'x-', 'xl'); new_bc%dir = 2_1
     case ('+x', 'x+', 'xr'); new_bc%dir = 1_1
     case ('-y', 'y-', 'yl'); new_bc%dir = 4_1
@@ -335,16 +262,16 @@ contains
   end subroutine add_bcond
 
   !> get a boundary condition
-  subroutine get_bcond(this,name,my_bc)
+  subroutine get_bcond(this, name, my_bc)
     use messager, only: die
     implicit none
     class(muscl), intent(inout) :: this
     character(len=*), intent(in) :: name
-    type(bcond), pointer, intent(out) :: my_bc
+    type(muscl_bc), pointer, intent(out) :: my_bc
 
     my_bc => this%first_bc
     do while (associated(my_bc))
-      if (trim(my_bc%name).eq.trim(name)) return
+      if (trim(my_bc%name) .eq. trim(name)) return
       my_bc => my_bc%next
     end do
 
@@ -363,7 +290,7 @@ contains
     integer(1) :: masked_type
     logical, dimension(this%N) :: vel_mask
     integer :: i, j, k, m, n, iref, jref, kref
-    type(bcond), pointer :: my_bc
+    type(muscl_bc), pointer :: my_bc
 
     ! Traverse bcond list
     my_bc => this%first_bc
@@ -428,7 +355,7 @@ contains
             end do
           case (1_1)
             call die('[muscl apply_bcond] Unknown bcond type')
-          case default 
+          case default
             call die('[muscl apply_bcond] Unknown bcond type')
         end select
 
@@ -533,11 +460,8 @@ contains
 
   end subroutine get_range
 
-  !> get mass flow rate through boundaries at previous step
-  !TODO
-
   !> compute dU in x direction
-  subroutine compute_dU_x(this, dt)
+  subroutine calc_dU_x(this, dt)
     use messager, only: die
     use mpi_f08,  only: MPI_ALLREDUCE, MPI_MAX
     use parallel, only: MPI_REAL_WP
@@ -577,10 +501,10 @@ contains
     this%have_CFL_x_estim = .true.; this%have_CFL_x_exact = .false.;
     this%have_Urange = .false.
 
-  end subroutine compute_dU_x
+  end subroutine calc_dU_x
 
   !> compute dU in y direction
-  subroutine compute_dU_y(this, dt)
+  subroutine calc_dU_y(this, dt)
     use messager, only: die
     use mpi_f08,  only: MPI_ALLREDUCE, MPI_MAX
     use parallel, only: MPI_REAL_WP
@@ -628,10 +552,10 @@ contains
     this%have_CFL_y_estim = .true.; this%have_CFL_y_exact = .false.;
     this%have_Urange = .false.
 
-  end subroutine compute_dU_y
+  end subroutine calc_dU_y
 
   !> compute dU in z direction
-  subroutine compute_dU_z(this, dt)
+  subroutine calc_dU_z(this, dt)
     use messager, only: die
     use mpi_f08,  only: MPI_ALLREDUCE, MPI_MAX
     use parallel, only: MPI_REAL_WP
@@ -680,7 +604,7 @@ contains
     this%have_CFL_z_estim = .true.; this%have_CFL_z_exact = .false.;
     this%have_Urange = .false.
 
-  end subroutine compute_dU_z
+  end subroutine calc_dU_z
 
   ! requires two ghost cells even if using the `upwind' limiter
   ! left as an independent function, but called is by class
@@ -702,9 +626,9 @@ contains
     real(WP), dimension(N) :: phil, phir
     integer :: j
 
-    call rsolver(N, params(:,1), U(:,1), params(:,2), U(:,2), ll)
-    call rsolver(N, params(:,2), U(:,2), params(:,3), U(:,3), lc)
-    call rsolver(N, params(:,3), U(:,3), params(:,4), U(:,4), rc)
+    call rsolver(P, N, params(:,1), U(:,1), params(:,2), U(:,2), ll)
+    call rsolver(P, N, params(:,2), U(:,2), params(:,3), U(:,3), lc)
+    call rsolver(P, N, params(:,3), U(:,3), params(:,4), U(:,4), rc)
 
     call handle_wavebc(wbcs(1), ll)
     call handle_wavebc(wbcs(2), lc)
@@ -717,7 +641,7 @@ contains
     call compute_limval(N, limfun, eps, ll, lc, rc, phil)
 
     do j = 3, M-2
-      call rsolver(N, params(:,j+1), U(:,j+1), params(:,j+2), U(:,j+2), rr)
+      call rsolver(P, N, params(:,j+1), U(:,j+1), params(:,j+2), U(:,j+2), rr)
       call handle_wavebc(wbcs(j+1), rr)
       call compute_limval(N, limfun, eps, lc, rc, rr, phir)
       CFLmax = max(CFLmax, maxval(abs(rr(:,1:2))) / min(dxs(j+1), dxs(j+2)))
@@ -788,12 +712,45 @@ contains
 
     ! waves from left
     tmp1 = lc_rs(:, 2) * lc_rs(:, 3)
+    !l_dxbeta : block
+    !  integer :: j
+    !  tmp2 = lc_rs(:, 1) + lc_rs(:, 2)
+    !  ! this probably isn't necessary for anything physical
+    !  do j = 1, N
+    !    if (tmp2(j) .eq. 0.0_WP) then
+    !      tmp2(j) = 0.5_WP
+    !    else if (tmp2(j) .gt. 0.0_WP) then
+    !      tmp2(j) = 1.0_WP
+    !    else
+    !      tmp2(j) = 0.0_WP
+    !    end if
+    !  end do
+    !  tmp2 = tmp2 * lc_rs(:, 4)
+    !  tmp2 = dx * tmp2
+    !end block l_dxbeta
+    !tmp1 = tmp1 - tmp2
     tmp2 = matmul(lc_rs(:, 5:(N+4)), tmp1)
     tmp2 = k / dx * tmp2
     dU = dU - tmp2
 
     ! waves from right
     tmp1 = rc_rs(:, 1) * rc_rs(:, 3)
+    !r_dxbeta : block
+    !  integer :: j
+    !  tmp2 = rc_rs(:, 1) + rc_rs(:, 2)
+    !  do j = 1, N
+    !    if (tmp2(j) .eq. 0.0_WP) then
+    !      tmp2(j) = 0.5_WP
+    !    else if (tmp2(j) .lt. 0.0_WP) then
+    !      tmp2(j) = 1.0_WP
+    !    else
+    !      tmp2(j) = 0.0_WP
+    !    end if
+    !  end do
+    !  tmp2 = tmp2 * rc_rs(:, 4)
+    !  tmp2 = dx * tmp2
+    !end block r_dxbeta
+    !tmp1 = tmp1 - tmp2
     tmp2 = matmul(rc_rs(:, 5:(N+4)), tmp1)
     tmp2 = k / dx * tmp2
     dU = dU - tmp2
@@ -944,11 +901,11 @@ contains
     do k = this%cfg%kmin_, this%cfg%kmax_
       do j = this%cfg%jmin_, this%cfg%jmax_
         do i = this%cfg%imin_, this%cfg%imax_
-          call this%evals_x(this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
+          call this%evals_x(this%P, this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
           task_CFL_x = max(task_CFL_x, this%cfg%dxi(i) * maxval(abs(evals)))
-          call this%evals_y(this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
+          call this%evals_y(this%P, this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
           task_CFL_y = max(task_CFL_y, this%cfg%dyi(i) * maxval(abs(evals)))
-          call this%evals_z(this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
+          call this%evals_z(this%P, this%N, this%params(:,i,j,k), this%Uc(:,i,j,k), evals)
           task_CFL_z = max(task_CFL_z, this%cfg%dzi(i) * maxval(abs(evals)))
         end do
       end do
@@ -970,67 +927,6 @@ contains
     this%have_CFL_z_estim = .true.; this%have_CFL_z_exact = .true.;
 
   end subroutine recalc_cfl
-
-  !! limiter definitions
-
-  ! limiter functions
-  pure function limiter_upwind(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = r
-    phi = 0.0
-  end function
-
-  pure function limiter_laxwend(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = r
-    phi = 1.0
-  end function
-
-  pure function limiter_beamwarm(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = r
-  end function
-
-  pure function limiter_fromm(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = 0.5_WP * (r + 1.0_WP)
-  end function
-
-  pure function limiter_minmod(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = max(0.0_WP, min(1.0_WP, r))
-  end function
-
-  pure function limiter_superbee(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = max(0.0_WP, min(1.0_WP, 2.0_WP * r), min(2.0_WP, r))
-  end function
-
-  pure function limiter_mc(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = max(0.0_WP, min((1.0_WP + r) / 2.0_WP, 2.0_WP, 2.0_WP * r))
-  end function
-
-  pure function limiter_vanleer(r) result(phi)
-    implicit none
-    real(WP), intent(in) :: r
-    real(WP) :: phi
-    phi = (r + abs(r)) / (1.0_WP + abs(r))
-  end function
 
 end module
 

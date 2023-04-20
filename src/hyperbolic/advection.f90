@@ -2,13 +2,14 @@
 !> contains necessary functions for using the muscl class (or other general hyperbolic
 !> solvers) to solve basic advection problems
 
-!> written by John P Wakefield in December 2022
+!> Originally written by John P Wakefield in December 2022.
 
 module hyperbolic_advection
   use precision,    only: WP
   use string,       only: str_medium
   use config_class, only: config
-  use muscl_class,  only: muscl, constructor, eigenvals_ftype, rsolver_ftype, limiter_ftype
+  use hyperbolic,   only: eigenvals_ftype, rsolver_ftype, limiter_ftype
+  use muscl_class,  only: muscl
   implicit none
 
   real(WP), parameter :: advec_muscl_cflsafety = 0.99_WP
@@ -32,16 +33,13 @@ contains
 
     name_actual = advec_muscl_name
 
-    evals_x_ptr => advec_evals_x
-    evals_y_ptr => advec_evals_y
-    evals_z_ptr => advec_evals_z
-    rsolv_x_ptr => advec_rsolv_x
-    rsolv_y_ptr => advec_rsolv_y
-    rsolv_z_ptr => advec_rsolv_z
+    evals_x_ptr => advec_evals_x; rsolv_x_ptr => advec_rsolv_x;
+    evals_y_ptr => advec_evals_y; rsolv_y_ptr => advec_rsolv_y;
+    evals_z_ptr => advec_evals_z; rsolv_z_ptr => advec_rsolv_z;
 
     ! build solver
-    solver = muscl(cfg, name_actual, N, 3, evals_x_ptr, evals_y_ptr,      &
-      & evals_z_ptr, rsolv_x_ptr, rsolv_y_ptr, rsolv_z_ptr, limiter,  &
+    solver = muscl(cfg, name_actual, N, 3, evals_x_ptr, evals_y_ptr,          &
+      & evals_z_ptr, rsolv_x_ptr, rsolv_y_ptr, rsolv_z_ptr, limiter,          &
       & advec_muscl_divzero_eps, advec_muscl_cflsafety)
 
     ! set velocity
@@ -56,10 +54,10 @@ contains
 
   end function make_advec_muscl
 
-  pure subroutine advec_evals_x(N, params, U, evals)
+  pure subroutine advec_evals_x(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: U
     real(WP), dimension(N), intent(out) :: evals
 
@@ -70,10 +68,10 @@ contains
 
   end subroutine advec_evals_x
 
-  pure subroutine advec_evals_y(N, params, U, evals)
+  pure subroutine advec_evals_y(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: U
     real(WP), dimension(N), intent(out) :: evals
 
@@ -84,10 +82,10 @@ contains
 
   end subroutine advec_evals_y
 
-  pure subroutine advec_evals_z(N, params, U, evals)
+  pure subroutine advec_evals_z(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: U
     real(WP), dimension(N), intent(out) :: evals
 
@@ -109,15 +107,13 @@ contains
     rs(:,2) = max(v, 0.0_WP)
     rs(:,3) = Ur(:) - Ul(:)
 
-    do i = 1, size(Ul, 1)
-      rs(i,i+4) = 1.0_WP
-    end do
+    rs(1:size(Ul,1),5:(size(Ul,1)+4)) = 1.0_WP
 
   end subroutine
 
-  pure subroutine advec_rsolv_x(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine advec_rsolv_x(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 
@@ -125,9 +121,9 @@ contains
 
   end subroutine advec_rsolv_x
 
-  pure subroutine advec_rsolv_y(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine advec_rsolv_y(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 
@@ -135,9 +131,9 @@ contains
 
   end subroutine advec_rsolv_y
 
-  pure subroutine advec_rsolv_z(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine advec_rsolv_z(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 

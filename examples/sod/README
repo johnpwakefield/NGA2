@@ -1,0 +1,6 @@
+The classic Sod problem (Sod, JCP, 1978).
+
+An incident angle may be specified so that the 1d behavior (see
+`input_aligned`) and the behavior at an angle to the mesh (see `input_skew`)
+may be examined.
+

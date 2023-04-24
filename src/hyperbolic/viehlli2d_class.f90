@@ -275,7 +275,7 @@ contains
     call viehlli2d_cons2prim(U, prim)
 
     v = prim(1) .gt. 0.0_WP .and. prim(4) .ge. 0.0_WP .and.                   &
-      prim(6) .ge. 0.0_WP .and. prim(6) * prim(4) - prim(5)**2 .ge. 0.0_WP
+      prim(6) .ge. 0.0_WP .and. prim(6) * prim(4) .ge. prim(5)**2
 
   end function viehlli2d_isvalid
 

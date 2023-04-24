@@ -376,7 +376,7 @@ contains
 
       ! Increment time
       call fs%get_cfl(time%dt, time%cfl)
-      time%cfl = max(time%cfl, time%dt / (taup * time%cflmax))
+      time%cfl = max(time%cfl, 2 * time%dt / (taup * time%cflmax))
       call time%adjust_dt()
       call time%increment()
 
@@ -400,7 +400,7 @@ contains
       fs%Uc = fs%Uc + fs%dU
       call cfg%sync(fs%Uc)
       fs%dU(:,:,:,:) = 0.0_WP
-      call eulersrc()
+      call backeulersrc(time%dt)
       fs%Uc = fs%Uc + fs%dU
       call cfg%sync(fs%Uc)
       fs%dU(:,:,:,:) = 0.0_WP

@@ -8,8 +8,8 @@ module hyperbolic_houssem2d
   use precision,    only: WP
   use string,       only: str_medium
   use config_class, only: config
-  use muscl_class,  only: muscl, VANLEER, eigenvals_ftype, rsolver_ftype,     &
-    & limiter_ftype
+  use muscl_class,  only: muscl
+  use hyperbolic,   only: VANLEER, eigenvals_ftype, rsolver_ftype, limiter_ftype
   implicit none
 
   real(WP), parameter :: CFL_SAFETY = 0.92_WP
@@ -117,10 +117,10 @@ contains
 
   end subroutine houssem2d_backeuler
 
-  pure subroutine houssem2d_evals_x(N, params, U, evals)
+  pure subroutine houssem2d_evals_x(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: u
     real(WP), dimension(N), intent(out) :: evals
 
@@ -128,10 +128,10 @@ contains
 
   end subroutine houssem2d_evals_x
 
-  pure subroutine houssem2d_evals_y(N, params, U, evals)
+  pure subroutine houssem2d_evals_y(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: u
     real(WP), dimension(N), intent(out) :: evals
     real(WP), dimension(6) :: u_permute
@@ -144,10 +144,10 @@ contains
 
   end subroutine houssem2d_evals_y
 
-  pure subroutine houssem2d_evals_z(N, params, U, evals)
+  pure subroutine houssem2d_evals_z(P, N, params, U, evals)
     implicit none
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: params
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: params
     real(WP), dimension(N), intent(in) :: u
     real(WP), dimension(N), intent(out) :: evals
     real(WP), dimension(N) :: u_permute
@@ -203,9 +203,9 @@ contains
 
   end subroutine houssem2d_evals_1d
 
-  pure subroutine houssem2d_rsolv_x(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine houssem2d_rsolv_x(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
 
@@ -213,9 +213,9 @@ contains
 
   end subroutine houssem2d_rsolv_x
 
-  pure subroutine houssem2d_rsolv_y(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine houssem2d_rsolv_y(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
     real(WP), dimension(N) :: Uln, Urn
@@ -231,9 +231,9 @@ contains
 
   end subroutine houssem2d_rsolv_y
 
-  pure subroutine houssem2d_rsolv_z(N, pl, Ul, pr, Ur, rs)
-    integer, intent(in) :: N
-    real(WP), dimension(:), intent(in) :: pl, pr
+  pure subroutine houssem2d_rsolv_z(P, N, pl, Ul, pr, Ur, rs)
+    integer, intent(in) :: P, N
+    real(WP), dimension(P), intent(in) :: pl, pr
     real(WP), dimension(N), intent(in) :: Ul, Ur
     real(WP), dimension(:,:), intent(out) :: rs
     real(WP), dimension(N) :: Uln, Urn

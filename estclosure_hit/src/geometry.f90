@@ -4,22 +4,22 @@ module geometry
    use precision,    only: WP
    implicit none
    private
-   
+
    !> Single config
    type(config), public :: cfg
-   
+
    public :: geometry_init
-   
+
 contains
-   
-   
+
+
    !> Initialization of problem geometry
    subroutine geometry_init
       use sgrid_class, only: sgrid
       use param,       only: param_read
       implicit none
       type(sgrid) :: grid
-      
+
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
@@ -37,7 +37,7 @@ contains
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=1,x=x,y=x,z=x,xper=.true.,yper=.true.,zper=.true.,name='HIT')
       end block create_grid
-      
+
       ! Create a config from that grid on our entire group
       create_cfg: block
          use parallel, only: group
@@ -47,13 +47,13 @@ contains
          ! Create partitioned grid
          cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_cfg
-      
+
       ! Create masks for this config
       create_walls: block
          cfg%VF=1.0_WP
       end block create_walls
-      
+
    end subroutine geometry_init
-   
-   
+
+
 end module geometry

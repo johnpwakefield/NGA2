@@ -10,7 +10,7 @@
 module estimclosures_class
   use precision,      only: WP
   use mathtools,      only: pi
-  use fft3d_class,    only: fft3d
+  use hitstats,       only: filterset
   use monitor_class,  only: monitor
   use string,         only: str_medium, str_long
   use sgrid_class,    only: sgrid
@@ -20,14 +20,7 @@ module estimclosures_class
   implicit none
   private
 
-  public :: estimclosures, estimclosures_mesh, FLT_NUM_PARAMS, FLT_GAUSSIAN,  &
-    ETAODX, RHOF, FORCE_TIMESCALE
-
-  !> give all filters six parameters, not all of which may be used
-  integer, parameter :: FLT_NUM_PARAMS = 6
-
-  !> filter types
-  integer, parameter :: FLT_GAUSSIAN = 1
+  public :: estimclosures, estimclosures_mesh, ETAODX, RHOF, FORCE_TIMESCALE
 
   !> mesh spacing to parameter conversion
   real(WP), parameter :: ETAODX = 0.4_WP
@@ -36,47 +29,6 @@ module estimclosures_class
   real(WP), parameter :: RHOF = 1.0_WP
   real(WP), parameter :: LEN_SCALE_PROPORTION = 0.2_WP
   real(WP), parameter :: FORCE_TIMESCALE = 1.0_WP
-
-  !> sizes of reported statistics arrays
-  integer, parameter :: NUM_S = 20        ! spatial
-  integer, parameter :: NUM_M = 13        ! microscopic
-  integer, parameter :: NUM_G = 4         ! enhanced settling (taup_tgt, taup_act, ubar, g)
-  ! TODO integer            :: num_b             ! B eq verification
-  integer, parameter :: NUM_T = 0         ! Vie/Houssem two fluid
-
-  !> structures containing statistics to store
-  type :: statpoint
-    real(WP) :: time
-    integer :: step, sweepnum
-    real(WP), dimension(4) :: nd_target   ! nondimensional target params
-    real(WP), dimension(4) :: nd_actual   ! actual achieved nondimensional params
-    real(WP), dimension(3) :: dimturb     ! urms, eta, nu
-    real(WP), dimension(NUM_S) :: S       ! spatial
-    real(WP), dimension(NUM_M) :: M       ! microscopic
-    real(WP), dimension(NUM_G) :: G       ! enhanced settling
-    !TODO real(WP), dimension(:), allocatable :: BPC1, BPC2, BPCCPC1, BPCCPC2  ! B eq verification
-    real(WP), dimension(NUM_T) :: T       ! Vie/Houssem equation
-  end type statpoint
-
-  !> filter information and corresponding monitor file
-  type :: filter
-    character(len=str_medium) :: out_fname
-    type(monitor) :: mon   !TODO , BPC1mon, BPCCPC1mon, BPC2mon, BPCCPC2mon
-    type(statpoint) :: d
-    integer :: type
-    real(WP), dimension(FLT_NUM_PARAMS) :: params
-    complex(WP), dimension(:,:,:), allocatable :: flt_f
-  contains
-    procedure :: setup => filter_setup
-    final :: filter_destruct
-  end type filter
-
-  !> helper structure to read in filter info from files
-  type :: filter_info_row
-    character(len=str_medium) :: out_fname
-    character(len=str_medium) :: typename
-    real(WP), dimension(FLT_NUM_PARAMS) :: params
-  end type
 
   !> parameters are stored in arrays, in the following order:
   !> params_nondim - 4 items - Relambda, Stk, phiinf, Wovk
@@ -87,39 +39,35 @@ module estimclosures_class
   type, abstract :: estimclosures
     ! configs for simulation
     class(pgrid), pointer :: sim_pg
-    ! fft object
-    type(fft3d), pointer :: fft
-    type(sgrid), pointer :: fft_sg
-    type(pgrid), pointer :: fft_pg
-    ! work arrays
-    complex(WP), dimension(:,:,:), allocatable :: phi_r
-    complex(WP), dimension(:,:,:), allocatable :: phi_f
-    ! props entries: 1-3 p vel, 4-6 f vel, 7-9 f stress, 10-12 drag
-    ! work entries: 1-3 xyz
-    complex(WP), dimension(:,:,:,:), allocatable :: props_r, work_r
-    complex(WP), dimension(:,:,:,:), allocatable :: props_f, work_f
-    ! filter list
-    integer :: num_filters
-    type(filter), dimension(:), allocatable :: filters
+    ! current state
+    integer :: step, interval, sweepnum
+    real(WP) :: time
+    real(WP), dimension(4) :: nondm_actual
+    real(WP), dimension(3) :: dimturb    ! urms, eta, nu
+    character(len=str_medium) :: out_fname
+    type(monitor) :: mon
+    ! filterset object
+    type(filterset), pointer :: hs
     ! integral length scales
     real(WP) :: linf, etamin, eta
-    ! interval and sweep counters
-    integer :: sweepnum
     ! number of timescales before writing output
     real(WP) :: interval_tinfs, sim_burnin_mult, param_burnin_mult
     ! store current parameter set
-    real(WP), dimension(7) :: params
-    real(WP), dimension(4) :: nondim
+    real(WP), dimension(7) :: param_target
+    real(WP), dimension(4) :: nondm_target
   contains
     procedure :: init => ec_init    ! parent constructor
     ! commented because I'm too lazy to write an interface block
     !procedure, deferred :: get_next_params
     !procedure, deferred :: get_interval
     procedure :: compute_statistics
+    procedure :: monitor_setup => ec_monitor_setup
+    procedure :: ensight_setup => ec_ensight_setup
+    procedure :: ensight_write => ec_ensight_write
     procedure :: destruct => ec_destruct
   end type estimclosures
 
-  ! first entry is statpoint, 2-5 are nondim params, 6 is sweep
+  ! first entry is datapoint index, 2-5 are nondim params, 6 is sweep
   type, extends(estimclosures) :: estimclosures_mesh
     ! nondim mesh info
     real(WP), dimension(2:5) :: pmin, pmax, pspacing
@@ -140,20 +88,11 @@ contains
 
   subroutine ec_init(ec, sim_pg)
     use param,       only: param_read
-    use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
-      MPI_COMM_WORLD
-    use parallel,    only: MPI_REAL_WP, GROUP
-    use sgrid_class, only: cartesian
-    use messager,    only: die
     implicit none
     class(estimclosures), intent(inout) :: ec
     class(pgrid), target, intent(in) :: sim_pg
-    real(WP), dimension(3) :: dx
-    real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
     integer, dimension(3) :: FFTN
     character(len=str_medium) :: filterfile
-    type(filter_info_row) :: f_info_raw
-    integer :: li, hi, lj, hj, lk, hk, i, fh, ierr
 
     ! store pointer to simulation config
     ec%sim_pg => sim_pg
@@ -171,69 +110,13 @@ contains
     call param_read('EC integral timescales', ec%interval_tinfs)
     call param_read('EC new sim multiplier', ec%sim_burnin_mult)
     call param_read('EC new params multiplier', ec%param_burnin_mult)
-    !TODO call param_read('EC NkB', ec%num_b, 1)
 
-    ! setup ffts (they need their own, much finer, pgrid)
+    ! setup fitlerset
+    call param_read('EC filter list', filterfile)
     call param_read('EC FFT mesh', FFTN)
-    dx(:) = (/ sim_pg%xL, sim_pg%yL, sim_pg%zL /) / FFTN
-    allocate(fftxs(FFTN(1)+1), fftys(FFTN(2)+1), fftzs(FFTN(3)+1))
-    do i = 1, FFTN(1) + 1; fftxs(i) = real(i-1,WP) * dx(1); end do;
-    do i = 1, FFTN(2) + 1; fftys(i) = real(i-1,WP) * dx(2); end do;
-    do i = 1, FFTN(3) + 1; fftzs(i) = real(i-1,WP) * dx(3); end do;
-    allocate(ec%fft_sg, ec%fft_pg, ec%fft)
-    ec%fft_sg = sgrid(coord=cartesian, no=0, x=fftxs, y=fftys, z=fftzs,       &
-      xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
-    ec%fft_pg = pgrid(ec%fft_sg, GROUP, (/ sim_pg%npx, sim_pg%npy,            &
-      sim_pg%npz /))
-    ec%fft = fft3d(ec%fft_pg)
 
-    ! allocate arrays
-    li = ec%fft_pg%imin_; lj = ec%fft_pg%jmin_; lk = ec%fft_pg%kmin_;
-    hi = ec%fft_pg%imax_; hj = ec%fft_pg%jmax_; hk = ec%fft_pg%kmax_;
-    allocate(ec%phi_r(li:hi,lj:hj,lk:hk), ec%props_r(li:hi,lj:hj,lk:hk,12),   &
-      ec%work_r(li:hi,lj:hj,lk:hk,3))
-    allocate(ec%phi_f(li:hi,lj:hj,lk:hk), ec%props_f(li:hi,lj:hj,lk:hk,12),   &
-      ec%work_f(li:hi,lj:hj,lk:hk,3))
-
-    ! read filter info (as root)
-    if (sim_pg%rank .eq. 0) then
-      call param_read('EC filter list', filterfile)
-      open(newunit=fh, file=filterfile, action='READ', access='SEQUENTIAL')
-      ! first just count them
-      ec%num_filters = 0
-      do
-        read(fh,*,iostat=ierr) f_info_raw
-        if (ierr .ne. 0) exit
-        ec%num_filters = ec%num_filters + 1
-      end do
-      allocate(ec%filters(ec%num_filters))
-      rewind(fh)
-      do i = 1, ec%num_filters
-        read(fh,*,iostat=ierr) f_info_raw
-        if (ierr .ne. 0) call die("[EC] error reading filterfile row")
-        select case (f_info_raw%typename)
-        case ('gaussian', 'GAUSSIAN', 'g', 'G')
-          ec%filters(i)%type = FLT_GAUSSIAN
-        case default
-          call die("[EC] unknown filter type '"//f_info_raw%typename//"'")
-        end select
-        ec%filters(i)%out_fname = f_info_raw%out_fname
-        ec%filters(i)%params(:) = f_info_raw%params
-      end do
-      close(fh)
-    end if
-
-    ! broadcast filter info and setup filters
-    call mpi_bcast(ec%num_filters, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
-    if (sim_pg%rank .ne. 0) allocate(ec%filters(ec%num_filters))
-    do i = 1, ec%num_filters
-      call mpi_bcast(ec%filters(i)%out_fname, str_medium, MPI_CHARACTER, 0,   &
-        sim_pg%comm, ierr)
-      call mpi_bcast(ec%filters(i)%type, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
-      call mpi_bcast(ec%filters(i)%params, FLT_NUM_PARAMS, MPI_REAL_WP, 0,    &
-        sim_pg%comm, ierr)
-      call ec%filters(i)%setup(ec%fft)
-    end do
+    allocate(ec%hs)
+    call ec%hs%init(sim_pg, filterfile, FFTN)
 
   end subroutine ec_init
 
@@ -298,104 +181,30 @@ contains
   end function ecmesh_from_args
 
   ! assumes out_fname, type, num_params, params are set
-  ! assumes fft has been setup
-  subroutine filter_setup(flt, fft)
-    use messager, only: die
-    use mpi_f08, only: MPI_SUM, mpi_allreduce
-    use parallel, only: MPI_REAL_WP
+  subroutine ec_monitor_setup(ec)
     implicit none
-    class(filter), intent(inout) :: flt
-    class(fft3d), intent(inout) :: fft
-    real(WP) :: r2_y, r2_z, a, b, flt_int_l, flt_int_g
-    integer :: j, k
+    class(estimclosures), intent(inout) :: ec
 
     ! setup monitor file
-    flt%mon = monitor(fft%pg%amRoot, flt%out_fname)
-    call flt%mon%add_column(flt%d%step,        'step')
-    call flt%mon%add_column(flt%d%sweepnum,    'sweep')
-    call flt%mon%add_column(flt%d%nd_target(1), 'tgt_Relam' )
-    call flt%mon%add_column(flt%d%nd_target(2), 'tgt_Stk'   )
-    call flt%mon%add_column(flt%d%nd_target(3), 'tgt_phiinf')
-    call flt%mon%add_column(flt%d%nd_target(4), 'tgt_Wovk'  )
-    call flt%mon%add_column(flt%d%nd_actual(1), 'act_Relam' )
-    call flt%mon%add_column(flt%d%nd_actual(2), 'act_Stk'   )
-    call flt%mon%add_column(flt%d%nd_actual(3), 'act_phiinf')
-    call flt%mon%add_column(flt%d%nd_actual(4), 'act_Wovk'  )
-    call flt%mon%add_column(flt%d%dimturb(1), 'urms')
-    call flt%mon%add_column(flt%d%dimturb(2), 'eta' )
-    call flt%mon%add_column(flt%d%dimturb(3), 'nu'  )
-    call flt%mon%add_column(flt%d%S( 1),  'PB'    )
-    call flt%mon%add_column(flt%d%S( 2),  'PC2'   )
-    call flt%mon%add_column(flt%d%S( 3),  'UBx'   )
-    call flt%mon%add_column(flt%d%S( 4),  'UBy'   )
-    call flt%mon%add_column(flt%d%S( 5),  'UBz'   )
-    call flt%mon%add_column(flt%d%S( 6),  'SBx'   )
-    call flt%mon%add_column(flt%d%S( 7),  'SBy'   )
-    call flt%mon%add_column(flt%d%S( 8),  'SBz'   )
-    call flt%mon%add_column(flt%d%S( 9),  'PBUBx' )
-    call flt%mon%add_column(flt%d%S(10),  'PBUBy' )
-    call flt%mon%add_column(flt%d%S(11),  'PBUBz' )
-    call flt%mon%add_column(flt%d%S(12),  'PBSBx' )
-    call flt%mon%add_column(flt%d%S(13),  'PBSBy' )
-    call flt%mon%add_column(flt%d%S(14),  'PBSBz' )
-    call flt%mon%add_column(flt%d%S(15),  'PCUCx' )
-    call flt%mon%add_column(flt%d%S(16),  'PCUCy' )
-    call flt%mon%add_column(flt%d%S(17),  'PCUCz' )
-    call flt%mon%add_column(flt%d%S(18),  'PC2UCx')
-    call flt%mon%add_column(flt%d%S(19),  'PC2UCy')
-    call flt%mon%add_column(flt%d%S(20),  'PC2UCz')
-    call flt%mon%add_column(flt%d%M( 1),  'DP')
-    call flt%mon%add_column(flt%d%M( 2),  'NP')
-    call flt%mon%add_column(flt%d%M( 3),  'RP')
-    call flt%mon%add_column(flt%d%M( 4),  'VF')
-    call flt%mon%add_column(flt%d%M( 5),  'VVxx')
-    call flt%mon%add_column(flt%d%M( 6),  'VVxy')
-    call flt%mon%add_column(flt%d%M( 7),  'VVxz')
-    call flt%mon%add_column(flt%d%M( 8),  'VVyy')
-    call flt%mon%add_column(flt%d%M( 9),  'VVyz')
-    call flt%mon%add_column(flt%d%M(10), 'VVzz')
-    call flt%mon%add_column(flt%d%M(11), 'DRGx')
-    call flt%mon%add_column(flt%d%M(12), 'DRGy')
-    call flt%mon%add_column(flt%d%M(13), 'DRGz')
-    call flt%mon%add_column(flt%d%G( 1), 'taup_tgt')
-    call flt%mon%add_column(flt%d%G( 2), 'taup_act')
-    call flt%mon%add_column(flt%d%G( 3), 'ubar')
-    call flt%mon%add_column(flt%d%G( 4), 'grav')
+    ec%out_fname = trim(adjustl('ecstate'))
+    ec%mon = monitor(ec%sim_pg%amRoot, ec%out_fname)
+    call ec%mon%add_column(ec%step,            'step')
+    call ec%mon%add_column(ec%time,            'time')
+    call ec%mon%add_column(ec%interval,        'interval')
+    call ec%mon%add_column(ec%sweepnum,        'sweep')
+    call ec%mon%add_column(ec%nondm_target(1), 'tgt_Relam' )
+    call ec%mon%add_column(ec%nondm_target(2), 'tgt_Stk'   )
+    call ec%mon%add_column(ec%nondm_target(3), 'tgt_phiinf')
+    call ec%mon%add_column(ec%nondm_target(4), 'tgt_Wovk'  )
+    call ec%mon%add_column(ec%nondm_actual(1), 'act_Relam' )
+    call ec%mon%add_column(ec%nondm_actual(2), 'act_Stk'   )
+    call ec%mon%add_column(ec%nondm_actual(3), 'act_phiinf')
+    call ec%mon%add_column(ec%nondm_actual(4), 'act_Wovk'  )
+    call ec%mon%add_column(ec%dimturb(1),      'urms')
+    call ec%mon%add_column(ec%dimturb(2),      'eta' )
+    call ec%mon%add_column(ec%dimturb(3),      'nu'  )
 
-    ! allocate Fourier space filter
-    allocate(flt%flt_f(fft%pg%imin_:fft%pg%imax_,fft%pg%jmin_:fft%pg%jmax_,   &
-      fft%pg%kmin_:fft%pg%kmax_))
-
-    ! fill real filter; we build fft%pg such that the corner is at origin
-    select case (flt%type)
-    case (FLT_GAUSSIAN)
-      a = (6.0_WP / (pi * flt%params(1)**2))**1.5_WP
-      b = -6.0_WP / flt%params(1)**2
-      do k = fft%pg%kmin_, fft%pg%kmax_
-        r2_z = fft%pg%z(k)**2
-        do j = fft%pg%jmin_, fft%pg%jmax_
-          r2_y = fft%pg%y(j)**2
-          flt%flt_f(:,j,k) = a * exp(b * (r2_z + r2_y +                       &
-            fft%pg%x(fft%pg%imin_:fft%pg%imax_)**2))
-        end do
-      end do
-    case default
-      call die("[estimclosures] invalid filter type")
-    end select
-
-    ! check filter is normalized
-    flt_int_l = sum(realpart(flt%flt_f))
-    call mpi_allreduce(flt_int_l, flt_int_g, 1, MPI_REAL_WP, MPI_SUM,         &
-      fft%pg%comm)
-    flt%flt_f = flt%flt_f / flt_int_g
-
-    ! transform filter
-    call fft%forward_transform(flt%flt_f)
-    if (fft%oddball) then
-      flt%flt_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_) = (1.0_WP, 0.0_WP)
-    end if
-
-  end subroutine filter_setup
+  end subroutine ec_monitor_setup
 
   ! params_nondim - 4 items - Relambda, Stk, phiinf, Wovk
   ! params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
@@ -431,56 +240,60 @@ contains
     ! get nondimensional values
     do n = 2, 5
       if (ec%plog(n)) then
-        ec%nondim(n-1) = ec%pmin(n) * ec%pspacing(n)**(ec%Icurr(n) - 1)
+        ec%nondm_target(n-1) = ec%pmin(n) * ec%pspacing(n)**(ec%Icurr(n) - 1)
       else
-        ec%nondim(n-1) = ec%pmin(n) + (ec%Icurr(n) - 1) * ec%pspacing(n)
+        ec%nondm_target(n-1) = ec%pmin(n) + (ec%Icurr(n) - 1) * ec%pspacing(n)
       end if
     end do
     ec%sweepnum = ec%Icurr(6)
 
     ! check to make sure we didn't make a mistake
     if (.not. done) then
-      if (any(ec%nondim - 1e3_WP * epsilon(1.0_WP) .gt. ec%pmax))             &
+      if (any(ec%nondm_target - 1e3_WP * epsilon(1.0_WP) .gt. ec%pmax))             &
         call die('[EC] big whoops')
-      if (any(ec%nondim + 1e3_WP * epsilon(1.0_WP) .lt. ec%pmin))             &
+      if (any(ec%nondm_target + 1e3_WP * epsilon(1.0_WP) .lt. ec%pmin))             &
         call die('[EC] little whoops')
     end if
 
     ! fluid parameters
     ! using the current approach viscosity is fixed throughout; it is computed
     ! at initialization
-    ec%params(1) = RHOF
-    ec%eta = ec%linf * (sqrt(15.0_WP) / ec%nondim(1))**1.5_WP
+    ec%param_target(1) = RHOF
+    ec%eta = ec%linf * (sqrt(15.0_WP) / ec%nondm_target(1))**1.5_WP
     if (ec%eta .lt. ec%etamin) call die("[EC] computed eta less than etamin")
-    ec%params(5) = ec%eta**2 * ec%nondim(1) / (FORCE_TIMESCALE * sqrt(15.0_WP))
-    ec%params(4) = ec%params(5)**3 / ec%eta**4
-    ec%params(3) = 1.5_WP * ec%params(4) * FORCE_TIMESCALE
+    ec%param_target(5) = ec%eta**2 * ec%nondm_target(1) / (FORCE_TIMESCALE * sqrt(15.0_WP))
+    ec%param_target(4) = ec%param_target(5)**3 / ec%eta**4
+    ec%param_target(3) = 1.5_WP * ec%param_target(4) * FORCE_TIMESCALE
 
     ! particle and gravity parameters
-    ec%params(6) = (6 * ec%sim_pg%vol_total * ec%nondim(3) / (pi * ec%Np))**(1.0_WP / 3)
-    ec%params(2) = ec%params(1) * 18 * ec%nondim(2) * sqrt(ec%params(5)**3 / ec%params(4)) / ec%params(6)**2
-    ec%params(7) = 18 * ec%params(1) / ec%params(2) * (ec%params(5)**5 * ec%params(4) / ec%params(6)**8)**0.25_WP * ec%nondim(4)
+    ec%param_target(6) = (6 * ec%sim_pg%vol_total * ec%nondm_target(3) / (pi * ec%Np))**(1.0_WP / 3)
+    ec%param_target(2) = ec%param_target(1) * 18 * ec%nondm_target(2) * sqrt(ec%param_target(5)**3 / ec%param_target(4)) / ec%param_target(6)**2
+    ec%param_target(7) = 18 * ec%param_target(1) / ec%param_target(2) * (ec%param_target(5)**5 * ec%param_target(4) / ec%param_target(6)**8)**0.25_WP * ec%nondm_target(4)
 
     ! print values if not done
     if (ec%sim_pg%amroot .and. .not. done) then
       write(*,*) "[EC] index: ", ec%Icurr
-      write(*,*) "[EC] nondim params: ", ec%nondim
-      write(*,*) "[EC] dim params: ", ec%params
+      write(*,*) "[EC] nondim params: ", ec%nondm_target
+      write(*,*) "[EC] dim params: ", ec%param_target
     end if
 
     ! log change if we moved to new parameters
     if (ec%params_are_new() .and. ec%sim_pg%amRoot) then
       write(message,'("[EC] changed to new param array (dimensional): ",e12.5,&
         &", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5,", ",e12.5)') &
-        ec%params
+        ec%param_target
       call log(message)
       write(message,'("[EC] changed to new param array (nondimensional): ",e12&
-        &.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%nondim
+        &.5,", ",e12.5,", ",e12.5,", ",e12.5)') ec%nondm_target
       call log(message)
     end if
 
+    ! update parent class state
+    ec%interval = ec%Icurr(1);
+    ec%sweepnum = ec%Icurr(6);
+
     ! copy to output
-    params(:) = ec%params(:)
+    params(:) = ec%param_target(:)
 
   end subroutine get_next_params
 
@@ -513,15 +326,6 @@ contains
 
   end subroutine get_interval
 
-  subroutine filter_destruct(flt)
-    implicit none
-    type(filter), intent(inout) :: flt
-
-    deallocate(flt%flt_f)
-    !TODO deallocate B matrices
-
-  end subroutine filter_destruct
-
   subroutine ec_destruct(ec, dealloc_sim_pg)
     implicit none
     class(estimclosures), intent(inout) :: ec
@@ -529,189 +333,43 @@ contains
 
     if (present(dealloc_sim_pg) .and. dealloc_sim_pg) deallocate(ec%sim_pg)
 
-    deallocate(ec%fft_sg, ec%fft_pg, ec%fft)
-
-    deallocate(ec%phi_r, ec%work_r, ec%props_r, ec%phi_f, ec%work_f, ec%props_f)
-
-    deallocate(ec%filters)
-
   end subroutine ec_destruct
 
+  subroutine ec_ensight_setup(ec)
+    use ensight_class, only: ensight
+    implicit none
+    class(estimclosures), intent(inout) :: ec
+
+    call ec%hs%setup_ensight()
+
+  end subroutine ec_ensight_setup
+
+  subroutine ec_ensight_write(ec, t)
+    use ensight_class, only: ensight
+    implicit none
+    class(estimclosures), intent(inout) :: ec
+    real(WP), intent(in) :: t
+
+    call ec%hs%write_ensight(t)
+
+  end subroutine ec_ensight_write
+
   subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time, step, ps, rho, visc, U, V, W, sx, sy, sz)
-    use mpi_f08,    only:  MPI_CHARACTER, MPI_INTEGER, mpi_reduce, mpi_allreduce, MPI_SUM
-    use parallel,   only: MPI_REAL_WP
-    use lpt_class,  only: part
-    use messager,   only: die
     implicit none
     class(estimclosures), intent(inout) :: ec
     real(WP), intent(in)  :: Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time
     integer, intent(in) :: step
     class(lpt), intent(inout) :: ps
     real(WP), dimension(ec%sim_pg%imino_:,ec%sim_pg%jmino_:,ec%sim_pg%kmino_:), intent(in) :: rho, visc, U, V, W, sx, sy, sz
-    integer, dimension(3) :: ind, indmin, indmax
-    real(WP) :: fft_rescale, pvol, dp_loc, vf_loc, taup_act, ubar, taup_loc, ubar_loc, dp, vf, junk
-    real(WP), dimension(6) :: meanVV_loc, meanVV, tmpvec
-    real(WP), dimension(3) :: drg_loc, drg, slip, dxdydz
-    integer :: n, i, j, k, N3
 
-    ! rescaling values
-    N3 = ec%fft%pg%nx * ec%fft%pg%ny * ec%fft%pg%nz
-    fft_rescale = 1.0_WP
-    indmin(:) = (/ ec%fft%pg%imin, ec%fft%pg%jmin, ec%fft%pg%kmin /)
-    indmax(:) = (/ ec%fft%pg%imax, ec%fft%pg%jmax, ec%fft%pg%kmax /)
-    dxdydz(:) = (/ ec%fft%pg%dx(indmin(1)), ec%fft%pg%dy(indmin(2)),          &
-      ec%fft%pg%dz(indmin(3)) /)
+    ec%step = step; ec%time = time;
+    ec%nondm_actual(:) = (/ Re_lambda, Stk, phiinf, Wovk /)
+    ec%nondm_target(:) = ec%nondm_target(:)
+    ec%dimturb(:) = (/ urms, eta, nu /)
+    call ec%mon%write()
 
-    ! project particle volumes and velocities to mesh, compute unfiltered
-    ! quantities
-    dp_loc = 0.0_WP; vf_loc = 0.0_WP; drg_loc = 0.0_WP; meanVV_loc(:) = 0.0_WP;
-    taup_loc = 0.0_WP; ubar_loc = 0.0_WP;
-    ec%phi_f(:,:,:) = 0.0_WP; ec%props_f(:,:,:,:) = 0.0_WP;
-    do n = 1, ps%np_
-      ps%p(n)%ind = ps%cfg%get_ijk_global(ps%p(n)%pos, ps%p(n)%ind)
-      ind = min(max(floor(ps%p(n)%pos / dxdydz), indmin), indmax)
-      ind(:) = ec%fft%pg%get_ijk_global(ps%p(n)%pos, ind)
-      i = ind(1); j = ind(2); k = ind(3);
-      dp_loc = dp_loc + ps%p(n)%d
-      pvol = pi * ps%p(n)%d**3 / 6.0_WP
-      vf_loc = vf_loc + pvol
-      meanVV_loc(1) = meanVV_loc(1) + ps%p(n)%vel(1) * ps%p(n)%vel(1)
-      meanVV_loc(2) = meanVV_loc(2) + ps%p(n)%vel(1) * ps%p(n)%vel(2)
-      meanVV_loc(3) = meanVV_loc(3) + ps%p(n)%vel(1) * ps%p(n)%vel(3)
-      meanVV_loc(4) = meanVV_loc(4) + ps%p(n)%vel(2) * ps%p(n)%vel(2)
-      meanVV_loc(5) = meanVV_loc(5) + ps%p(n)%vel(2) * ps%p(n)%vel(3)
-      meanVV_loc(6) = meanVV_loc(6) + ps%p(n)%vel(3) * ps%p(n)%vel(3)
-      ec%phi_f(i,j,k) = ec%phi_f(i,j,k) + pvol
-      ec%props_f(i,j,k,1:3) = ec%props_f(i,j,k,1:3) + pvol * ps%p(n)%vel(1:3)
-      tmpvec(1:3) = ps%cfg%get_velocity(pos=ps%p(n)%pos, i0=ps%p(n)%ind(1),   &
-        j0=ps%p(n)%ind(2), k0=ps%p(n)%ind(3), U=U, V=V, W=W)
-      tmpvec(4:6) = ps%cfg%get_velocity(pos=ps%p(n)%pos, i0=ps%p(n)%ind(1),   &
-        j0=ps%p(n)%ind(2), k0=ps%p(n)%ind(3), U=sx, V=sy, W=sz)
-      slip(:) = tmpvec(1:3) - ps%p(n)%vel(:)
-      tmpvec(4:6) = 0.0_WP
-      ec%props_f(i,j,k,4:9) = ec%props_f(i,j,k,4:9) + pvol * tmpvec(:)
-      call ps%get_rhs(U=U, V=V, W=W, rho=rho, visc=visc, stress_x=sx,         &
-        stress_y=sy, stress_z=sz, p=ps%p(n), acc=tmpvec(1:3),                 &
-        torque=tmpvec(4:6), opt_dt=junk)
-      drg_loc(:) = drg_loc(:) + tmpvec(1:3)
-      ec%props_f(i,j,k,10:12) = ec%props_f(i,j,k,10:12) + pvol * tmpvec(1:3)
-      taup_loc = taup_loc + sum(slip * tmpvec(1:3)) / sum(tmpvec(1:3)**2)
-      ubar_loc = ubar_loc + ps%p(n)%vel(1)
-    end do
-    ec%phi_f = ec%phi_f * N3 / ec%sim_pg%vol_total
-    ec%props_f = ec%props_f * (real(N3, WP) / ec%sim_pg%vol_total)
-    call mpi_allreduce(ps%np_, n, 1, MPI_INTEGER, MPI_SUM, ec%fft%pg%comm)
-    call mpi_allreduce(dp_loc, dp, 1, MPI_REAL_WP, MPI_SUM, ec%fft%pg%comm)
-    call mpi_allreduce(vf_loc, vf, 1, MPI_REAL_WP, MPI_SUM, ec%fft%pg%comm)
-    call mpi_allreduce(drg_loc, drg, 1, MPI_REAL_WP, MPI_SUM, ec%fft%pg%comm)
-    call mpi_allreduce(taup_loc, taup_act, 1, MPI_REAL_WP, MPI_SUM,           &
-      ec%fft%pg%comm)
-    call mpi_allreduce(ubar_loc, ubar, 1, MPI_REAL_WP, MPI_SUM, ec%fft%pg%comm)
-    call mpi_allreduce(meanVV_loc, meanVV, 6, MPI_REAL_WP, MPI_SUM,           &
-      ec%fft%pg%comm)
-    call mpi_allreduce(drg_loc, drg, 3, MPI_REAL_WP, MPI_SUM, ec%fft%pg%comm)
-    dp = dp / n; vf = vf / ec%sim_pg%vol_total; meanVV = meanVV / n;
-    drg = drg / n; taup_act = taup_act / n; ubar = ubar / n;
-
-    ! do forward transforms to get variables in fourier space
-    call ec%fft%forward_transform(ec%phi_f)
-    do j = 1, 12; call ec%fft%forward_transform(ec%props_f(:,:,:,j)); end do;
-
-    ! for each filter, convolve and compute means, write result
-    do i = 1, ec%num_filters
-
-      ! set time, step, interval number, and sweep in statpoint
-      ec%filters(i)%d%time = time; ec%filters(i)%d%step = step;
-      ec%filters(i)%d%sweepnum = ec%sweepnum
-
-      ! store target fluid and particle statistics
-      ec%filters(i)%d%nd_target(:) = ec%nondim(:)
-      ec%filters(i)%d%nd_actual(:) = (/ Re_lambda, Stk, phiinf, Wovk /)
-      ec%filters(i)%d%dimturb(:) = (/ urms, eta, nu /)
-      ec%filters%d%G(1) = ec%params(2) / ec%params(1) * ec%params(6)**2 / (18 * ec%params(5))
-      ec%filters(i)%d%G(4) = ec%params(7)
-
-      ! compute filtered phi
-      ec%phi_r = ec%phi_f * ec%filters(i)%flt_f
-      call ec%fft%backward_transform(ec%phi_r)
-      ec%phi_r = fft_rescale * ec%phi_r
-
-      ! compute filtered properties
-      do j = 1, 12
-        ec%props_r(:,:,:,j) = ec%props_f(:,:,:,j) * ec%filters(i)%flt_f
-        call ec%fft%backward_transform(ec%props_r(:,:,:,j))
-      end do
-      ec%props_r = fft_rescale * ec%props_r
-
-      ! replace f vel with slip
-      ec%props_r(:,:,:,4:6) = ec%props_r(:,:,:,1:3) - ec%props_r(:,:,:,4:6)
-
-      ! set S1, S3, S4, S5 (on all tasks); S6, S7, S8 (on root)
-      tmpvec(1) = sum(realpart(ec%phi_r))
-      call mpi_allreduce(tmpvec(1), ec%filters(i)%d%S(1), 1, MPI_REAL_WP,     &
-        MPI_SUM, ec%fft%pg%comm)
-      ec%filters(i)%d%S(1) = ec%filters(i)%d%S(1) / N3
-      do k = 1, 6
-        tmpvec(k) = sum(realpart(ec%props_r(:,:,:,k)))
-      end do
-      call mpi_allreduce(tmpvec(1:3), ec%filters(i)%d%S(3:5), 3, MPI_REAL_WP, &
-        MPI_SUM, ec%fft%pg%comm)
-      call mpi_reduce(tmpvec(4:6), ec%filters(i)%d%S(6:8), 3, MPI_REAL_WP,    &
-        MPI_SUM, 0, ec%fft%pg%comm)
-      ec%filters(i)%d%S(3:8) = ec%filters(i)%d%S(3:8) / N3
-
-      ! set S9, S10, S11, S12, S13, S14 (filtered density velocity and density
-      ! slip products)
-      do k = 1, 6
-        ec%props_r(:,:,:,k) = ec%phi_r(:,:,:) * ec%props_r(:,:,:,k)
-        tmpvec(k) = sum(realpart(ec%props_r(:,:,:,k)))
-      end do
-      call mpi_reduce(tmpvec, ec%filters(i)%d%S(9:14), 6, MPI_REAL_WP,        &
-        MPI_SUM, 0, ec%fft%pg%comm)
-      ec%filters(i)%d%S(9:14) = ec%filters(i)%d%S(9:14) / N3
-
-      ! done with uncentered quantities; center phi, vel, and slip
-      ec%phi_r = ec%phi_r - ec%filters(i)%d%S(1)
-      do k = 1, 6
-        ec%props_r(:,:,:,k) = ec%props_r(:,:,:,k) - ec%filters(i)%d%S(k+2)
-      end do
-
-      ! set S15 through S20 (products with check quantities)
-      do k = 1, 3
-        ec%props_r(:,:,:,k) = ec%phi_r(:,:,:) * ec%props_r(:,:,:,k)
-        tmpvec(k) = sum(realpart(ec%props_r(:,:,:,k)))
-      end do
-      do k = 1, 3
-        ec%props_r(:,:,:,k) = ec%phi_r(:,:,:) * ec%props_r(:,:,:,k)
-        tmpvec(k+3) = sum(realpart(ec%props_r(:,:,:,k)))
-      end do
-      call mpi_reduce(tmpvec, ec%filters(i)%d%S(15:20), 6, MPI_REAL_WP,       &
-        MPI_SUM, 0, ec%fft%pg%comm)
-      ec%filters(i)%d%S(15:20) = ec%filters(i)%d%S(15:20) / N3
-
-      ! set S2
-      ec%phi_r = ec%phi_r**2
-      tmpvec(1) = sum(realpart(ec%phi_r))
-      call mpi_reduce(tmpvec(1), ec%filters(i)%d%S(2), 1, MPI_REAL_WP,        &
-        MPI_SUM, 0, ec%fft%pg%comm)
-      ec%filters(i)%d%S(2) = ec%filters(i)%d%S(2) / N3
-
-      ! copy microscopic statistics
-      ec%filters(i)%d%M(1) = dp;           ec%filters(i)%d%M(2) = n;
-      ec%filters(i)%d%M(3) = ps%rho;       ec%filters(i)%d%M(4) = vf;
-      ec%filters(i)%d%M(5:10) = meanVV(:); ec%filters(i)%d%M(11:13) = drg;
-      ec%filters(i)%d%G(2) = taup_act;     ec%filters(i)%d%G(3) = ubar;
-
-      !todo B
-
-      !todo T
-
-      ! save stats
-      if (ec%fft%pg%rank .eq. 0) call ec%filters(i)%mon%write()
-
-    end do
+    call ec%hs%compute_stats(step, ps, rho, visc, U, V, W, sx, sy, sz)
 
   end subroutine compute_statistics
 
 end module estimclosures_class
-

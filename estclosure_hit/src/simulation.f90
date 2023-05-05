@@ -31,6 +31,7 @@ module simulation
   type(partmesh)       :: pmesh
   type(ensight)        :: ens_out
   type(periodic_event) :: ens_evt
+  logical              :: ens_at_ints
 
   !> Closure Estimation
   type(estimclosures_mesh) :: ec
@@ -254,6 +255,8 @@ contains
       ! don't call update_parameters here; it needs to be called after the
       ! flow solver and lpt are set up
 
+      call ec%monitor_setup()
+
     end block initialize_ec
 
     ! Create a single-phase flow solver without bconds
@@ -405,13 +408,22 @@ contains
       ens_out=ensight(cfg=cfg,name='HIT')
       ! Create event for Ensight output
       ens_evt=periodic_event(time=time,name='Ensight output')
-      call param_read('Ensight output period',ens_evt%tper)
+      call param_read('Ensight at intervals', ens_at_ints)
+      if (.not. ens_at_ints) then
+        call param_read('Ensight output period',ens_evt%tper)
+      else
+        ens_evt%tper = 6e66_WP
+      end if
       ! Add variables to output
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_particle('particles',pmesh)
+      ! Set up ensight output for filtered quantities
+      call ec%ensight_setup()
+      call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
+      call ec%ensight_write(time%t)
       ! Output to ensight
-      if (ens_evt%occurs()) call ens_out%write_data(time%t)
+      if (.not. ens_at_ints .and. ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
 
     ! Create a monitor file
@@ -528,6 +540,7 @@ contains
         call time%adjust_dt()
         time%dt = min(time%dt, FORCE_TIMESCALE / G)
         time%dt = min(time%dt, sqrt(nu / max(EPS, EPSp)))
+        time%dt = min(time%dt, ec_evt%tnext - time%t)
         call time%increment()
 
         ! Remember old velocity
@@ -536,7 +549,8 @@ contains
         ! advance particles
         wt_lpt%time_in=parallel_time()
         !call lp%collide(dt=time%dtmid)
-        call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc)
+        !TODO DEBUG
+        !call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc)
         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
         ! Perform sub-iterations
@@ -614,9 +628,11 @@ contains
         wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
 
         ! Output to ensight
-        if (ens_evt%occurs()) then
+        if (.not. ens_at_ints .and. ens_evt%occurs()) then
           call update_pmesh()
           call ens_out%write_data(time%t)
+          call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
+          call ec%ensight_write(time%t)
         end if
 
         ! Output monitoring
@@ -653,8 +669,14 @@ contains
       ec_next: block
         real(WP) :: interval
 
-        !TODO use fluid stress
         call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
+
+        if (ens_at_ints) then
+          call update_pmesh()
+          call ens_out%write_data(time%t)
+          call ec%ensight_write(time%t)
+        end if
+
         call ec%get_next_params(ec_params, ec_done)
         call ec%get_interval(interval)
         ec_evt%tnext = ec_evt%tnext + interval

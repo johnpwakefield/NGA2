@@ -41,6 +41,9 @@ EC FFT mesh       : 256 256 256
 EC filter list    : filterlist.txt
 EC output period  : 1e-0
 
+# HS Parameters
+HS write ensight  : true
+
 # Time integration
 Max timestep size : 1e-2
 Max cfl number    : 0.9
@@ -48,4 +51,5 @@ Max iter          : 9999999
 
 # Ensight output
 Ensight output period : 1.0
+Ensight at intervals  : true
 

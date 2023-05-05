@@ -43,9 +43,8 @@ module fft3d_class
     type(C_PTR) :: fplan_y,bplan_y
     type(C_PTR) :: fplan_z,bplan_z
 
-    !> Unstrided arrays
-    complex(WP), dimension(:,:,:), allocatable :: factored_operator
-    complex(WP), dimension(:,:,:), allocatable :: transformed_rhs
+    ! resulting wavenumbers
+    real(WP), dimension(:), allocatable :: kx,ky,kz
 
     ! Storage for transposed data
     complex(WP), dimension(:,:,:), allocatable :: xtrans, ytrans, ztrans
@@ -141,6 +140,37 @@ contains
       if (ndcp.ge.ndim) call die('[fft3d constructor] Need at least one &
         &NON-decomposed direction')
     end block check_solver_is_useable
+
+    ! Store wavenumbers
+    compute_wavenumbers: block
+      use mathtools, only: pi
+      integer :: i, j, k
+      allocate(self%kx(self%pg%imin_:self%pg%imax_),self%ky(self%pg%jmin_:self%pg%jmax_),self%kz(self%pg%kmin_:self%pg%kmax_))
+      do i = self%pg%imin_, self%pg%imax_
+        if (i .le. self%pg%nx/2) then
+          self%kx(i) = i - 1
+        else
+          self%kx(i) = i - self%pg%nx - 1
+        end if
+      end do
+      do j = self%pg%jmin_, self%pg%jmax_
+        if (j .le. self%pg%ny/2) then
+          self%ky(j) = j - 1
+        else
+          self%ky(j) = j - self%pg%ny - 1
+        end if
+      end do
+      do k = self%pg%kmin_, self%pg%kmax_
+        if (k .le. self%pg%nz/2) then
+          self%kz(k) = k - 1
+        else
+          self%kz(k) = k - self%pg%nz - 1
+        end if
+      end do
+      self%kx = 2 * pi / self%pg%xL * self%kx
+      self%ky = 2 * pi / self%pg%yL * self%ky
+      self%kz = 2 * pi / self%pg%zL * self%kz
+    end block compute_wavenumbers
 
     ! Initialize transpose and FFTW plans in x
     if (self%pg%nx.gt.1) then

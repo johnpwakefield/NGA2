@@ -549,8 +549,7 @@ contains
         ! advance particles
         wt_lpt%time_in=parallel_time()
         !call lp%collide(dt=time%dtmid)
-        !TODO DEBUG
-        !call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc)
+        call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho,visc=fs%visc)
         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
         ! Perform sub-iterations

@@ -15,6 +15,8 @@ module event_class
    type, abstract :: event
       character(len=str_medium)   :: name='UNNAMED_EVENT' !< Name for event
       class(timetracker), pointer :: time                 !< Timetracker for event
+      integer  :: nnext
+      real(WP) :: tnext
    contains
       procedure(occur_ftype), deferred :: occurs          !< Check if event is occuring
    end type event
@@ -27,8 +29,8 @@ module event_class
    end interface
 
    type, extends(event) :: periodic_event
-      integer  :: nper                        !< Period in elapsed number of time steps
-      real(WP) :: tper                        !< Period in elapsed time
+      integer  :: nper                       !< Period in elapsed number of time steps
+      real(WP) :: tper, toff                 !< Period in elapsed time
    contains
       procedure :: occurs => periodic_occurs  !< Check if event is occuring
    end type periodic_event
@@ -37,8 +39,6 @@ module event_class
    end interface periodic_event
 
    type, extends(event) :: threshold_event
-     integer  :: nnext
-     real(WP) :: tnext
      logical  :: occurred
    contains
      procedure :: occurs => threshold_occurs  !< Check if event is occuring
@@ -63,8 +63,13 @@ contains
       ! Set the event name
       if (present(name)) self%name=trim(adjustl(name))
       ! Default to 0 periods for event
-      self%nper=-1
-      self%tper=-1.0_WP
+      self%nper = -1
+      self%tper = -1.0_WP
+      ! Default to never occuring
+      self%nnext = -1
+      self%tnext = -1.0_WP
+      ! Default to no time offset
+      self%toff = 0.0_WP
 
    end function periodic_event_constructor
 
@@ -76,10 +81,24 @@ contains
 
       ! Assume not occuring
       occurs = .false.
+
       ! Go through standard occurence tests
       occurs = this%nper.gt.0 .and. mod(this%time%n,this%nper).eq.0
       occurs = occurs .or. (this%tper.gt.0.0_WP .and.                         &
         mod(this%time%t+CSAFE*epsilon(this%time%t),this%tper).lt.this%time%dt)
+
+      ! Update offset if event occurs
+      if (occurs) this%toff = this%time%t
+
+      ! update tnext/nnext
+      ! note: these provide reference values, but the old behavior is
+      ! retained if only checks for occurence are used
+      if (this%nper .gt. 0)                                                   &
+         this%nnext = this%nper * (this%time%n / this%nper) + this%nper
+      if (this%tper .gt. 0.0_WP) then
+         this%tnext = this%tper * floor((this%time%t - this%toff) /           &
+            this%tper) + this%tper
+      end if
 
    end function periodic_occurs
 

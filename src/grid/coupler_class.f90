@@ -151,7 +151,8 @@ contains
       this%got_dst=.true.
       ! Process location info
       if (present(loc)) this%dloc=lowercase(loc)
-      if (this%dloc.ne.'c'.and.this%dloc.ne.'x'.and.this%dloc.ne.'y'.and.this%dloc.ne.'z') call die('[coupler set_dst] Improper location value was provided')
+      if (all(this%dloc .ne. (/ 'x', 'y', 'z', 'c' /))) call die('[coupler set_dst] Improper location value was provided')
+      !if (this%dloc.ne.'c'.and.this%dloc.ne.'x'.and.this%dloc.ne.'y'.and.this%dloc.ne.'z') call die('[coupler set_dst] Improper location value was provided')
    end subroutine set_dst
    
    
@@ -177,17 +178,10 @@ contains
          if (this%rank.eq.this%droot) then
             simu_name=this%dst%name
             coord=this%dst%coordsys
-            xper=this%dst%xper
-            yper=this%dst%yper
-            zper=this%dst%zper
-            nx=this%dst%nx
-            ny=this%dst%ny
-            nz=this%dst%nz
-            no=this%dst%no
+            xper=this%dst%xper; yper=this%dst%yper; zper=this%dst%zper;
+            nx=this%dst%nx; ny=this%dst%ny; nz=this%dst%nz; no=this%dst%no;
             this%dnproc=this%dst%nproc
-            this%dnpx=this%dst%npx
-            this%dnpy=this%dst%npy
-            this%dnpz=this%dst%npz
+            this%dnpx=this%dst%npx; this%dnpy=this%dst%npy; this%dnpz=this%dst%npz;
          end if
          
          ! Then it broadcasts it to our group
@@ -235,9 +229,7 @@ contains
          ! Destination root process extracts partition
          if (this%rank.eq.this%droot) then
             this%dnproc=this%dst%nproc
-            this%dnpx=this%dst%npx
-            this%dnpy=this%dst%npy
-            this%dnpz=this%dst%npz
+            this%dnpx=this%dst%npx; this%dnpy=this%dst%npy; this%dnpz=this%dst%npz;
          end if
          
          ! Broadcast it to our group
@@ -319,9 +311,9 @@ contains
                allocate(dstind(3,this%nsend))
                
                ! Get ready to find the dst rank
-               qx=this%dst%nx/this%dnpx; rx=mod(this%dst%nx,this%dnpx)
-               qy=this%dst%ny/this%dnpy; ry=mod(this%dst%ny,this%dnpy)
-               qz=this%dst%nz/this%dnpz; rz=mod(this%dst%nz,this%dnpz)
+               qx=this%dst%nx/this%dnpx; rx=mod(this%dst%nx,this%dnpx);
+               qy=this%dst%ny/this%dnpy; ry=mod(this%dst%ny,this%dnpy);
+               qz=this%dst%nz/this%dnpz; rz=mod(this%dst%nz,this%dnpz);
                
                ! Traverse the entire dst mesh and identify points that can be interpolated
                count=0
@@ -467,14 +459,14 @@ contains
       real(WP), dimension(this%src%imino_:,this%src%jmino_:,this%src%kmino_:), intent(in) :: A !< Needs to be (src%imino_:src%imaxo_,src%jmino_:src%jmaxo_,src%kmino_:src%kmaxo_)
       integer :: n
       do n=1,this%nsend
-         this%data_send(n)=(       this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)+1)  + &
-         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)+1)) + &
-         &                                       (1.0_WP-this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)  ,this%srcind(3,n)+1)  + &
-         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)  ,this%srcind(3,n)+1)))+ &
-         &                 (1.0_WP-this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)  )  + &
-         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)  )) + &
-         &                                       (1.0_WP-this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)  ,this%srcind(3,n)  )  + &
-         &                                                             (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)  ,this%srcind(3,n)  )))
+         this%data_send(n)=(this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)+1)  + &
+           &                                                    (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)+1)) + &
+           &                              (1.0_WP-this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)  ,this%srcind(3,n)+1)  + &
+           &                                                    (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)  ,this%srcind(3,n)+1)))+ &
+           &        (1.0_WP-this%w(3,n))*((       this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)+1,this%srcind(3,n)  )  + &
+           &                                                    (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)+1,this%srcind(3,n)  )) + &
+           &                              (1.0_WP-this%w(2,n))*((       this%w(1,n))*A(this%srcind(1,n)+1,this%srcind(2,n)  ,this%srcind(3,n)  )  + &
+           &                                                    (1.0_WP-this%w(1,n))*A(this%srcind(1,n)  ,this%srcind(2,n)  ,this%srcind(3,n)  )))
       end do
    end subroutine push
    

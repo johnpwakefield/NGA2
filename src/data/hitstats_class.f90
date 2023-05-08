@@ -6,6 +6,7 @@
 !>
 module hitstats
   use precision,      only: WP
+  use mpi_f08,        only: MPI_GROUP
   use fft3d_class,    only: fft3d
   use monitor_class,  only: monitor
   use string,         only: str_medium, str_long
@@ -14,6 +15,7 @@ module hitstats
   use config_class,   only: config
   use lpt_class,      only: lpt
   use ensight_class,  only: ensight
+  use coupler_class,  only: coupler
   implicit none
   private
 
@@ -94,8 +96,12 @@ module hitstats
     real(WP), dimension(:,:,:), pointer :: phi, phicheck
     real(WP), dimension(:,:,:,:), pointer :: up, uf
     ! only used for ensight output
-    type(ensight) :: ens_out
+    type(sgrid) :: ens_sg
     type(config) :: ens_cfg
+    type(MPI_GROUP) :: ens_grp
+    logical :: in_ens_grp
+    type(coupler) :: ens_cpl
+    type(ensight) :: ens_out
   contains
     procedure :: init => filterset_init
     procedure :: setup_ensight => filterset_setup_ensight
@@ -601,6 +607,9 @@ contains
       call this%filters(i)%init(this%fft)
     end do
 
+    ! set all processes to not be ensight processes until it's set up
+    this%in_ens_grp = .false.
+
     ! announce success
     if (sim_pg%rank .eq. 0) then
       write(*,'(a,i0,a)') "[EC] initialized ", this%num_filters, " filters"
@@ -609,30 +618,94 @@ contains
   end subroutine filterset_init
 
   subroutine filterset_setup_ensight(this)
-    use parallel, only: group
+    use sgrid_class, only: cartesian
     implicit none
     class(filterset), intent(inout) :: this
     type(filter), pointer :: flt
     integer :: n, li, hi, lj, hj, lk, hk
     real(WP), dimension(:,:,:), pointer :: vx, vy, vz
+    real(WP) :: thickness, height
+    real(WP), dimension(2) :: z
     integer, dimension(3) :: partition
 
-    ! for bullshit reasons that make no sense, nothing has been implemented to
-    ! handle things that don't have volume fractions, so we have to waste a
-    ! ton of memory making a bunch of volume fraction arrays so that we can
-    ! store stuff in an ensight file without rewriting the class
+    ! the the ensight group we use the parallel decomposition of the first
+    ! two indices used for the simulation and index 1 in the third dimension;
+    ! this means things will run slightly faster if ens_idx is in the first
+    ! 1/npz-th of the domain
 
-    partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, this%sim_pg%npz /)
-    this%ens_cfg = config(grp=group, decomp=partition, grid=this%fft_sg)
-    this%ens_out = ensight(cfg=this%ens_cfg, name='HITFILT')
+    thickness = this%sim_pg%zL * 0.001_WP
+    height = 0.5_WP * this%sim_pg%zL / this%sim_pg%npz
+    z(1) = height; z(2) = height + thickness;
+    this%ens_sg = sgrid(coord=cartesian, no=0, x=this%fft_pg%x,               &
+      y=this%fft_pg%y, z=z, xper=.true., yper=.true., zper=.false.,           &
+      name='HITFILTSLICE')
+    determine_group: block
+      use mpi_f08, only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR, mpi_allreduce
+      use messager, only: die
+      logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group
+      integer, dimension(:,:), allocatable :: ranges
+      integer :: i, j, nchunks, ierr
+      logical :: prev
 
-    li = this%fft%pg%imino_; hi = this%fft%pg%imaxo_;
-    lj = this%fft%pg%jmino_; hj = this%fft%pg%jmaxo_;
-    lk = this%fft%pg%kmino_; hk = this%fft%pg%kmaxo_;
+      in_group_loc(:) = .false.
+      in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
+      call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,           &
+        MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
+
+      write(*,*) "in group array", in_group(:)
+
+      prev = .false.
+      nchunks = 0
+      do i = 1, this%sim_pg%nproc
+        if (in_group(i) .and. .not. prev) nchunks = nchunks + 1
+        prev = in_group(i)
+      end do
+
+      allocate(ranges(3,nchunks))
+      j = 0
+      prev = .false.
+      do i = 1, this%sim_pg%nproc
+        if (in_group(i) .and. .not. prev) then
+          j = j + 1
+          ranges(1,j) = i - 1
+        end if
+        if (.not. in_group(i) .and. prev) then
+          ranges(2,j) = i - 2
+        end if
+        prev = in_group(i)
+      end do
+      if (prev) ranges(2,j) = this%sim_pg%nproc - 1
+      ranges(3,:) = 1
+      if (j .ne. nchunks) call die("[EC] error determining ensight group")
+
+      call mpi_group_range_incl(this%sim_pg%group, nchunks, ranges,           &
+        this%ens_grp, ierr)
+
+      deallocate(ranges)
+
+      this%in_ens_grp = in_group(this%sim_pg%rank+1)
+
+    end block determine_group
+
+    partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, 1 /)
+    if (this%in_ens_grp) then
+      this%ens_cfg = config(grp=this%ens_grp, decomp=partition, grid=this%ens_sg)
+      this%ens_cfg%VF = 1.0_WP
+    end if
+    this%ens_cpl = coupler(src_grp=this%sim_pg%group, dst_grp=this%ens_grp,   &
+      name='HITFILTSLICE')
+    call this%ens_cpl%set_src(this%fft_pg)
+    if (this%in_ens_grp) call this%ens_cpl%set_dst(this%ens_cfg)
+    call this%ens_cpl%initialize()
+    if (this%in_ens_grp) this%ens_out = ensight(cfg=this%ens_cfg,             &
+      name='HITFILTSLICE')
 
     do n = 1, this%num_filters
       flt => this%filters(n)
-      if (.not. flt%use_ensight) cycle
+      if (.not. flt%use_ensight .or. .not. this%in_ens_grp) cycle
+      li = this%ens_cfg%imino_; hi = this%ens_cfg%imaxo_;
+      lj = this%ens_cfg%jmino_; hj = this%ens_cfg%jmaxo_;
+      lk = this%ens_cfg%kmino_; hk = this%ens_cfg%kmaxo_;
       allocate(flt%ens_phi(li:hi,lj:hj,lk:hk),                                &
         flt%ens_up(li:hi,lj:hj,lk:hk,3), flt%ens_uf(li:hi,lj:hj,lk:hk,3))
       call this%ens_out%add_scalar(trim(flt%filtername) // 'phi', flt%ens_phi)
@@ -649,7 +722,7 @@ contains
     class(filterset), intent(inout) :: this
     real(WP), intent(in) :: t
 
-    call this%ens_out%write_data(t)
+    if (this%in_ens_grp) call this%ens_out%write_data(t)
 
   end subroutine filterset_write_ensight
 
@@ -667,7 +740,7 @@ contains
       this%sim_pg%kmino_:), sy(this%sim_pg%imino_:,this%sim_pg%jmino_:,        &
       this%sim_pg%kmino_:), sz(this%sim_pg%imino_:,this%sim_pg%jmino_:,        &
       this%sim_pg%kmino_:)
-    integer :: n
+    integer :: m, n
 
     call compute_micro_stats(this%sim_pg, this%fft%pg, this%mstats, ps, step, &
       rho, visc, U, V, W, sx, sy, sz, this%phi, this%up, this%uf)
@@ -680,9 +753,17 @@ contains
         this%filters(n), step, this%phi_in_f, this%up_in_f, this%uf_in_f,      &
         this%phi, this%phicheck, this%up, this%uf, this%work_r, this%work_c)
       if (this%filters(n)%use_ensight) then
-        this%filters(n)%ens_phi = this%phi
-        this%filters(n)%ens_up = this%up
-        this%filters(n)%ens_uf = this%uf
+        call this%ens_cpl%push(this%phi)
+        call this%ens_cpl%transfer()
+        if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_phi)
+        do m = 1, 3
+          call this%ens_cpl%push(this%up(:,:,:,m))
+          call this%ens_cpl%transfer()
+          if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_up(:,:,:,m))
+          call this%ens_cpl%push(this%uf(:,:,:,m))
+          call this%ens_cpl%transfer()
+          if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_uf(:,:,:,m))
+        end do
       end if
     end do
 

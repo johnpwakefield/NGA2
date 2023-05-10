@@ -647,7 +647,7 @@ contains
     ! determine which group we're in
     in_group_loc(:) = .false.
     in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
-    call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,           &
+    call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,             &
       MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
     if (in_group(1)) then; n = 1; else; n = 0; end if;
     do i = 2, this%sim_pg%nproc

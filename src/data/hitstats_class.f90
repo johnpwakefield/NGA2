@@ -618,15 +618,20 @@ contains
   end subroutine filterset_init
 
   subroutine filterset_setup_ensight(this)
+    use mpi_f08, only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR, mpi_allreduce
+    use messager, only: die
     use sgrid_class, only: cartesian
     implicit none
     class(filterset), intent(inout) :: this
     type(filter), pointer :: flt
-    integer :: n, li, hi, lj, hj, lk, hk
+    integer :: n, li, hi, lj, hj, lk, hk, i, j, ierr
     real(WP), dimension(:,:,:), pointer :: vx, vy, vz
     real(WP) :: thickness, height
     real(WP), dimension(2) :: z
     integer, dimension(3) :: partition
+    logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group  
+    integer, dimension(3,this%sim_pg%nproc) :: ranges
+    logical :: prev
 
     ! the the ensight group we use the parallel decomposition of the first
     ! two indices used for the simulation and index 1 in the third dimension;
@@ -639,53 +644,33 @@ contains
     this%ens_sg = sgrid(coord=cartesian, no=0, x=this%fft_pg%x,               &
       y=this%fft_pg%y, z=z, xper=.true., yper=.true., zper=.false.,           &
       name='HITFILTSLICE')
-    determine_group: block
-      use mpi_f08, only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR, mpi_allreduce
-      use messager, only: die
-      logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group
-      integer, dimension(:,:), allocatable :: ranges
-      integer :: i, j, nchunks, ierr
-      logical :: prev
-
-      in_group_loc(:) = .false.
-      in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
-      call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,           &
-        MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
-
-      write(*,*) "in group array", in_group(:)
-
-      prev = .false.
-      nchunks = 0
-      do i = 1, this%sim_pg%nproc
-        if (in_group(i) .and. .not. prev) nchunks = nchunks + 1
-        prev = in_group(i)
-      end do
-
-      allocate(ranges(3,nchunks))
-      j = 0
-      prev = .false.
-      do i = 1, this%sim_pg%nproc
-        if (in_group(i) .and. .not. prev) then
-          j = j + 1
-          ranges(1,j) = i - 1
-        end if
-        if (.not. in_group(i) .and. prev) then
-          ranges(2,j) = i - 2
-        end if
-        prev = in_group(i)
-      end do
-      if (prev) ranges(2,j) = this%sim_pg%nproc - 1
-      ranges(3,:) = 1
-      if (j .ne. nchunks) call die("[EC] error determining ensight group")
-
-      call mpi_group_range_incl(this%sim_pg%group, nchunks, ranges,           &
-        this%ens_grp, ierr)
-
-      deallocate(ranges)
-
-      this%in_ens_grp = in_group(this%sim_pg%rank+1)
-
-    end block determine_group
+    ! determine which group we're in
+    in_group_loc(:) = .false.
+    in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
+    call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,           &
+      MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
+    if (in_group(1)) then; n = 1; else; n = 0; end if;
+    do i = 2, this%sim_pg%nproc
+      if (in_group(i) .and. .not. in_group(i-1)) n = n + 1
+    end do
+    j = 0
+    prev = .false.
+    do i = 1, this%sim_pg%nproc
+      if (in_group(i) .and. .not. prev) then
+        j = j + 1
+        ranges(1,j) = i - 1
+      end if
+      if (.not. in_group(i) .and. prev) then
+        ranges(2,j) = i - 2
+      end if
+      prev = in_group(i)
+    end do
+    if (prev) ranges(2,j) = this%sim_pg%nproc - 1
+    ranges(3,:) = 1
+    if (j .ne. n) call die("[EC] error determining ensight group")
+    call mpi_group_range_incl(this%sim_pg%group, n, ranges(1:3,1:n),          &
+      this%ens_grp, ierr)
+    this%in_ens_grp = in_group(this%sim_pg%rank+1)
 
     partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, 1 /)
     if (this%in_ens_grp) then

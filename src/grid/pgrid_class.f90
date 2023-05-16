@@ -93,7 +93,6 @@ module pgrid_class
       procedure, private :: pgrid_rsyncsum                                      !< Summation inner and periodic boundaries for real(WP)
       procedure :: get_rank                                                     !< Function that returns rank of processor that contains provided indices
       procedure :: get_ijk_local                                                !< Function that returns closest mesh indices to a provided position - local to processor subdomain
-      procedure :: get_ijk_global                                               !< Function that returns closest mesh indices to a provided position - global over full pgrid
       procedure :: get_ijk_from_lexico,get_lexico_from_ijk                      !< Functions that convert a lexicographic index to (i,j,k) and vice-versa
    end type pgrid
 
@@ -1092,28 +1091,6 @@ contains
       do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo_); ind(3)=ind(3)+1; end do
       do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino_); ind(3)=ind(3)-1; end do
    end function get_ijk_local
-
-
-   !> Returns the closest global indices "ind" to the provided position "pos" with initial guess "ind_guess"
-   function get_ijk_global(this,pos,ind_guess) result(ind)
-      implicit none
-      class(pgrid), intent(in) :: this
-      real(WP), dimension(3), intent(in) :: pos
-      integer,  dimension(3), intent(in) :: ind_guess
-      integer,  dimension(3) :: ind
-      ! X direction
-      ind(1)=ind_guess(1)
-      do while (pos(1).gt.this%x(ind(1)+1).and.ind(1).lt.this%imaxo); ind(1)=ind(1)+1; end do
-      do while (pos(1).lt.this%x(ind(1)  ).and.ind(1).gt.this%imino); ind(1)=ind(1)-1; end do
-      ! Y direction
-      ind(2)=ind_guess(2)
-      do while (pos(2).gt.this%y(ind(2)+1).and.ind(2).lt.this%jmaxo); ind(2)=ind(2)+1; end do
-      do while (pos(2).lt.this%y(ind(2)  ).and.ind(2).gt.this%jmino); ind(2)=ind(2)-1; end do
-      ! Z direction
-      ind(3)=ind_guess(3)
-      do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo); ind(3)=ind(3)+1; end do
-      do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino); ind(3)=ind(3)-1; end do
-   end function get_ijk_global
 
 
    !> Returns the rank that contains provided indices

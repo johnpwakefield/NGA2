@@ -57,6 +57,8 @@ module sgrid_class
       procedure :: print=>sgrid_print                  !< Output grid to screen
       procedure :: log  =>sgrid_log                    !< Output grid to log file
       procedure :: write=>sgrid_write                  !< Output grid to grid file
+      procedure :: get_ijk_global_withguess,get_ijk_global_noguess
+      generic :: get_ijk_global=>get_ijk_global_withguess,get_ijk_global_noguess !< Function that returns closest mesh indices to a provided position - global over full pgrid
    end type sgrid
    
    !> Declare basic grid constructor
@@ -318,7 +320,46 @@ contains
          write(message,'(" >    volume = ",es12.5)') this%vol_total; call log(message)
       end if
    end subroutine sgrid_log
-   
+
+
+   !> Uses division to get an initial guess, then calls get_ijk_global
+   function get_ijk_global_noguess(this,pos) result(ind)
+      implicit none
+      class(sgrid), intent(in) :: this
+      real(WP), dimension(3), intent(in) :: pos
+      integer,  dimension(3) :: ind, indguess
+      real(WP), dimension(3) :: y, dx
+      ! Use division to get an initial guess
+      y = (/ this%x(this%imin), this%y(this%jmin), this%z(this%kmin) /)
+      dx = (/ this%dx(this%imin), this%dy(this%jmin), this%dz(this%kmin) /)
+      y = (pos - y) / dx
+      indguess = ceiling(y)
+      ! Call get_ijk_global
+      ind = get_ijk_global_withguess(this,pos,indguess)
+   end function get_ijk_global_noguess
+
+
+   !> Returns the closest global indices "ind" to the provided position "pos" with initial guess "ind_guess"
+   function get_ijk_global_withguess(this,pos,ind_guess) result(ind)
+      implicit none
+      class(sgrid), intent(in) :: this
+      real(WP), dimension(3), intent(in) :: pos
+      integer,  dimension(3), intent(in) :: ind_guess
+      integer,  dimension(3) :: ind
+      ! X direction
+      ind(1)=ind_guess(1)
+      do while (pos(1).gt.this%x(ind(1)+1).and.ind(1).lt.this%imaxo); ind(1)=ind(1)+1; end do
+      do while (pos(1).lt.this%x(ind(1)  ).and.ind(1).gt.this%imino); ind(1)=ind(1)-1; end do
+      ! Y direction
+      ind(2)=ind_guess(2)
+      do while (pos(2).gt.this%y(ind(2)+1).and.ind(2).lt.this%jmaxo); ind(2)=ind(2)+1; end do
+      do while (pos(2).lt.this%y(ind(2)  ).and.ind(2).gt.this%jmino); ind(2)=ind(2)-1; end do
+      ! Z direction
+      ind(3)=ind_guess(3)
+      do while (pos(3).gt.this%z(ind(3)+1).and.ind(3).lt.this%kmaxo); ind(3)=ind(3)+1; end do
+      do while (pos(3).lt.this%z(ind(3)  ).and.ind(3).gt.this%kmino); ind(3)=ind(3)-1; end do
+   end function get_ijk_global_withguess
+
    
    !> Output a serial grid object to a file
    subroutine sgrid_write(this,file)

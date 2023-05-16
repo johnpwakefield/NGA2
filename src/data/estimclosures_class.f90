@@ -56,7 +56,8 @@ module estimclosures_class
     real(WP), dimension(7) :: param_target
     real(WP), dimension(4) :: nondm_target
   contains
-    procedure :: init => ec_init    ! parent constructor
+    procedure :: construct => ec_construct  ! constructors of abstract classes in fortran are wonky
+    procedure :: init => ec_init            ! parent initializer
     ! commented because I'm too lazy to write an interface block
     !procedure, deferred :: get_next_params
     !procedure, deferred :: get_interval
@@ -81,18 +82,15 @@ module estimclosures_class
     procedure :: get_interval
     procedure :: params_are_new
   end type estimclosures_mesh
-
-  interface estimclosures_mesh; procedure ecmesh_from_args; end interface
+  interface estimclosures_mesh; procedure ecmesh_from_args; end interface;
 
 contains
 
-  subroutine ec_init(ec, sim_pg)
-    use param,       only: param_read
+  subroutine ec_construct(ec, sim_pg)
+    use param, only: param_read
     implicit none
     class(estimclosures), intent(inout) :: ec
     class(pgrid), target, intent(in) :: sim_pg
-    integer, dimension(3) :: FFTN
-    character(len=str_medium) :: filterfile
 
     ! store pointer to simulation config
     ec%sim_pg => sim_pg
@@ -111,12 +109,23 @@ contains
     call param_read('EC new sim multiplier', ec%sim_burnin_mult)
     call param_read('EC new params multiplier', ec%param_burnin_mult)
 
-    ! setup fitlerset
+    ! allocate (but don't initialize) hitstats object
+    allocate(ec%hs)
+
+  end subroutine ec_construct
+
+  subroutine ec_init(ec, ps, rhof_array, visc, U, V, W, sx, sy, sz)
+    use param,       only: param_read
+    implicit none
+    class(estimclosures), intent(inout) :: ec
+    type(lpt), target, intent(inout) :: ps
+    real(WP), dimension(:,:,:), target, intent(in) :: rhof_array, visc, U, V, W, sx, sy, sz
+    integer, dimension(3) :: FFTN
+    character(len=str_medium) :: filterfile
+
     call param_read('EC filter list', filterfile)
     call param_read('EC FFT mesh', FFTN)
-
-    allocate(ec%hs)
-    call ec%hs%init(sim_pg, filterfile, FFTN)
+    call ec%hs%init(ec%sim_pg, filterfile, FFTN, rhof_array, visc, U, V, W, sx, sy, sz, ps)
 
   end subroutine ec_init
 
@@ -130,7 +139,7 @@ contains
     real(WP) :: Relammax
 
     ! init parent
-    call ec%init(cfg)
+    call ec%construct(cfg)
 
     ! read params
     call param_read('EC min Relambda',       ec%pmin(2))
@@ -354,13 +363,11 @@ contains
 
   end subroutine ec_ensight_write
 
-  subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time, step, ps, rho, visc, U, V, W, sx, sy, sz)
+  subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time, step)
     implicit none
     class(estimclosures), intent(inout) :: ec
     real(WP), intent(in)  :: Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time
     integer, intent(in) :: step
-    class(lpt), intent(inout) :: ps
-    real(WP), dimension(ec%sim_pg%imino_:,ec%sim_pg%jmino_:,ec%sim_pg%kmino_:), intent(in) :: rho, visc, U, V, W, sx, sy, sz
 
     ec%step = step; ec%time = time;
     ec%nondm_actual(:) = (/ Re_lambda, Stk, phiinf, Wovk /)
@@ -368,7 +375,7 @@ contains
     ec%dimturb(:) = (/ urms, eta, nu /)
     call ec%mon%write()
 
-    call ec%hs%compute_stats(step, ps, rho, visc, U, V, W, sx, sy, sz)
+    call ec%hs%compute_stats(step)
 
   end subroutine compute_statistics
 

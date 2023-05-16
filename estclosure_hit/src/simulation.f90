@@ -24,8 +24,8 @@ module simulation
   type(timetracker), public :: time
 
   ! particles
-  type(lpt), public :: lp
-  real(WP), dimension(:,:,:), allocatable :: rho, sx, sy, sz
+  type(lpt), target, public :: lp
+  real(WP), dimension(:,:,:), pointer :: rho, sx, sy, sz
 
   !> Ensight postprocessing
   type(partmesh)       :: pmesh
@@ -82,9 +82,6 @@ contains
     call fs%cfg%integrate(A=fs%V,integral=meanV); meanV = meanV / fs%cfg%vol_total;
     call fs%cfg%integrate(A=fs%W,integral=meanW); meanW = meanW / fs%cfg%vol_total;
 
-    ! Interpolate
-    call fs%interp_vel(Ui, Vi, Wi)
-
     ! Compute strainrate and grad(u)
     call fs%get_strainrate(SR=SR)
     call fs%get_gradu(gradu=gradu)
@@ -94,8 +91,8 @@ contains
     do k=fs%cfg%kmin_,fs%cfg%kmax_
       do j=fs%cfg%jmin_,fs%cfg%jmax_
         do i=fs%cfg%imin_,fs%cfg%imax_
-          myTKE = myTKE + 0.5_WP*((Ui(i,j,k)-meanU)**2 + (Vi(i,j,k)-meanV)**2 &
-            + (Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+          myTKE = myTKE + 0.5_WP*((fs%U(i,j,k)-meanU)**2 +                    &
+            (fs%V(i,j,k)-meanV)**2 + (fs%W(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
           myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(           &
             SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(             &
             SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
@@ -191,8 +188,8 @@ contains
       pmesh%vec(:,1,i) = lp%p(i)%vel
       lp%p(i)%ind = cfg%get_ijk_global(lp%p(i)%pos, lp%p(i)%ind)
       pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,                 &
-        i0=lp%p(i)%ind(1), j0=lp%p(i)%ind(2), k0=lp%p(i)%ind(3), U=Ui, V=Vi,  &
-        W=Wi)
+        i0=lp%p(i)%ind(1), j0=lp%p(i)%ind(2), k0=lp%p(i)%ind(3), U=fs%U,      &
+        V=fs%V, W=fs%W)
     end do
 
   end subroutine update_pmesh
@@ -287,7 +284,7 @@ contains
       integer :: i, Np
 
       ! Create solver
-      lp=lpt(cfg=cfg,name='LPT')
+      lp = lpt(cfg=cfg, name='LPT')
 
       ! Get drag model from the input
       call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
@@ -380,8 +377,7 @@ contains
       fs%V=fs%V-time%dt*resV/fs%rho
       fs%W=fs%W-time%dt*resW/fs%rho
 
-      ! Calculate cell-centered velocities and divergence
-      call fs%interp_vel(Ui,Vi,Wi)
+      ! Calculate divergence
       call fs%get_div()
 
       ! update parameters to print logging information
@@ -391,6 +387,9 @@ contains
 
     ! Compute initial turbulence stats
     call compute_stats()
+
+    ! initialize hitstats objects now that we have pointers to fs and lp
+    call ec%init(lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
 
     ! Create partmesh object for Lagrangian particle output
     create_pmesh: block
@@ -420,7 +419,7 @@ contains
       call ens_out%add_particle('particles',pmesh)
       ! Set up ensight output for filtered quantities
       call ec%ensight_setup()
-      call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
+      call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n)
       call ec%ensight_write(time%t)
       ! Output to ensight
       if (.not. ens_at_ints .and. ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -608,9 +607,6 @@ contains
           fs%W = fs%W - time%dt * resW / fs%rho
           wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
 
-          ! Recompute interpolated velocity
-          call fs%interp_vel(Ui,Vi,Wi)
-
           ! Increment sub-iteration counter
           time%it=time%it+1
 
@@ -629,9 +625,8 @@ contains
         ! Output to ensight
         if (.not. ens_at_ints .and. ens_evt%occurs()) then
           call update_pmesh()
+          call fs%interp_vel(Ui, Vi, Wi)
           call ens_out%write_data(time%t)
-          call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
-          call ec%ensight_write(time%t)
         end if
 
         ! Output monitoring
@@ -668,12 +663,12 @@ contains
       ec_next: block
         real(WP) :: interval
 
-        call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n, lp, rho, fs%visc, fs%U, fs%V, fs%W, sx, sy, sz)
+        call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n)
+        call ec%ensight_write(time%t)
 
         if (ens_at_ints) then
           call update_pmesh()
           call ens_out%write_data(time%t)
-          call ec%ensight_write(time%t)
         end if
 
         call ec%get_next_params(ec_params, ec_done)

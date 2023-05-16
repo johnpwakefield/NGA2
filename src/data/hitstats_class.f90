@@ -5,17 +5,19 @@
 !> Originally written by John P Wakefield in May 2023
 !>
 module hitstats
-  use precision,      only: WP
-  use mpi_f08,        only: MPI_GROUP
-  use fft3d_class,    only: fft3d
-  use monitor_class,  only: monitor
-  use string,         only: str_medium, str_long
-  use sgrid_class,    only: sgrid
-  use pgrid_class,    only: pgrid
-  use config_class,   only: config
-  use lpt_class,      only: lpt
-  use ensight_class,  only: ensight
-  use coupler_class,  only: coupler
+  use precision,        only: WP
+  use mpi_f08,          only: MPI_GROUP
+  use fft3d_class,      only: fft3d
+  use monitor_class,    only: monitor
+  use string,           only: str_medium, str_long
+  use sgrid_class,      only: sgrid
+  use pgrid_class,      only: pgrid
+  use config_class,     only: config
+  use lpt_class,        only: lpt
+  use ensight_class,    only: ensight
+  use coupler_class,    only: coupler
+  use lptcoupler_class, only: lptcoupler
+  use partmesh_class,   only: partmesh
   implicit none
   private
 
@@ -84,6 +86,8 @@ module hitstats
 
   type :: filterset
     type(pgrid), pointer :: sim_pg
+    real(WP), dimension(:,:,:), pointer :: rhof, visc, U, V, W, sx, sy, sz
+    type(lpt), pointer :: ps
     type(sgrid) :: fft_sg
     type(pgrid) :: fft_pg
     type(fft3d) :: fft
@@ -102,6 +106,9 @@ module hitstats
     logical :: in_ens_grp
     type(coupler) :: ens_cpl
     type(ensight) :: ens_out
+    type(lpt) :: ens_lpt
+    type(lptcoupler) :: ens_lptcpl
+    type(partmesh) :: ens_pmesh
   contains
     procedure :: init => filterset_init
     procedure :: setup_ensight => filterset_setup_ensight
@@ -157,7 +164,7 @@ contains
   ! project particle volumes and velocities to mesh, compute unfiltered quantities
   ! this method subtly depends on the fft pgrid and the sim_pgrid sharing the same
   ! parallel decomposition so that particles end up on the same processors
-  subroutine compute_micro_stats(sim_pg, fft_pg, stats, ps, step, rho, visc,  &
+  subroutine compute_micro_stats(sim_pg, fft_pg, stats, ps, step, rhof, visc,  &
     U, V, W, sx, sy, sz, indfield, pvelfield, fvelfield)
     use mpi_f08, only:   mpi_allreduce, mpi_reduce, MPI_SUM, MPI_INTEGER
     use parallel, only:  MPI_REAL_WP
@@ -167,7 +174,7 @@ contains
     type(microstats), intent(inout) :: stats
     type(lpt), intent(inout) :: ps
     integer, intent(in) :: step
-    real(WP), dimension(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:), intent(in) :: rho, visc, U, V, W, sx, sy, sz
+    real(WP), dimension(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:), intent(in) :: rhof, visc, U, V, W, sx, sy, sz
     real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:), optional, intent(out) :: indfield
     real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:,1:), optional, intent(out) :: pvelfield, fvelfield
     real(WP) :: dp_loc, VF_loc, taup_loc, pvol, cellvoli
@@ -210,7 +217,7 @@ contains
         j0=ps%p(n)%ind(2), k0=ps%p(n)%ind(3), U=U, V=V, W=W)
       slp = fvel - ps%p(n)%vel
       slp_loc = slp_loc + slp
-      call ps%get_rhs(U=U, V=V, W=W, rho=rho, visc=visc, stress_x=sx,         &
+      call ps%get_rhs(U=U, V=V, W=W, rho=rhof, visc=visc, stress_x=sx,        &
         stress_y=sy, stress_z=sz, p=ps%p(n), acc=drg,                         &
         torque=junk(1:3), opt_dt=junk(4))
       drg_loc = drg_loc + drg
@@ -516,7 +523,7 @@ contains
 
   !> filterset
 
-  subroutine filterset_init(this, sim_pg, filterfile, FFTN)
+  subroutine filterset_init(this, sim_pg, filterfile, FFTN, rhof, visc, U, V, W, sx, sy, sz, ps)
     use param,       only: param_read
     use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
       MPI_LOGICAL, MPI_COMM_WORLD
@@ -528,14 +535,27 @@ contains
     class(pgrid), target, intent(in) :: sim_pg
     character(len=str_medium), intent(in) :: filterfile
     integer, dimension(3), intent(in) :: FFTN
+    type(lpt), target, intent(in) :: ps
+    real(WP), intent(in), target ::                                           &
+      rhof(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                     &
+      visc(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                     &
+      U(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
+      V(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
+      W(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
+      sx(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                       &
+      sy(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                       &
+      sz(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:)
     real(WP), dimension(3) :: dx
     real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
     type(filter_info_row) :: f_info_raw
     integer :: li, hi, lj, hj, lk, hk, i, fh, ierr
     logical :: use_ensight
 
-    ! store pointer to simulation config
-    this%sim_pg => sim_pg
+    ! store pointer to simulation config and data
+    this%sim_pg => sim_pg; this%ps => ps;
+    this%rhof => rhof; this%visc => visc;
+    this%U => U; this%V => V; this%W => W;
+    this%sx => sx; this%sy => sy; this%sz => sz;
 
     ! set up microscopic statistics
     this%mstats%out_fname = 'microstats'
@@ -612,13 +632,16 @@ contains
 
     ! announce success
     if (sim_pg%rank .eq. 0) then
-      write(*,'(a,i0,a)') "[EC] initialized ", this%num_filters, " filters"
+      write(*,'(a,i0,a)') " [EC] initialized ", this%num_filters, " filters"
     end if
 
   end subroutine filterset_init
 
   subroutine filterset_setup_ensight(this)
-    use mpi_f08, only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR, mpi_allreduce
+    use mpi_f08    !,  only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR,           &
+      !mpi_allreduce, mpi_bcast
+    use parallel, only: MPI_REAL_WP
+    use param,    only: param_read
     use messager, only: die
     use sgrid_class, only: cartesian
     implicit none
@@ -638,12 +661,17 @@ contains
     ! this means things will run slightly faster if ens_idx is in the first
     ! 1/npz-th of the domain
 
-    thickness = this%sim_pg%zL * 0.001_WP
+    if (this%sim_pg%amroot)                                                  &
+      call param_read('HS slice thickness proportion', thickness)
+    call mpi_bcast(thickness, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
+    thickness = this%sim_pg%zL * thickness
     height = 0.5_WP * this%sim_pg%zL / this%sim_pg%npz
+    height = height + this%sim_pg%x(this%sim_pg%imin)
     z(1) = height; z(2) = height + thickness;
-    this%ens_sg = sgrid(coord=cartesian, no=0, x=this%fft_pg%x,               &
-      y=this%fft_pg%y, z=z, xper=.true., yper=.true., zper=.false.,           &
-      name='HITFILTSLICE')
+    this%ens_sg = sgrid(coord=cartesian, no=1,                                &
+      x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
+      y=this%fft_pg%y(this%fft_pg%jmin:this%fft_pg%jmax+1),                   &
+      z=z, xper=.true., yper=.true., zper=.false., name='HITFILTSLICE')
     ! determine which group we're in
     in_group_loc(:) = .false.
     in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
@@ -675,15 +703,30 @@ contains
     partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, 1 /)
     if (this%in_ens_grp) then
       this%ens_cfg = config(grp=this%ens_grp, decomp=partition, grid=this%ens_sg)
+      this%ens_lpt = lpt(cfg=this%ens_cfg, name='HITSLICE')
       this%ens_cfg%VF = 1.0_WP
+      this%ens_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
+      this%ens_pmesh%varname(1) = "id"
+      this%ens_pmesh%varname(2) = "dp"
+      this%ens_pmesh%vecname(1) = "vel"
+      this%ens_pmesh%vecname(2) = "fld"
     end if
     this%ens_cpl = coupler(src_grp=this%sim_pg%group, dst_grp=this%ens_grp,   &
       name='HITFILTSLICE')
+    this%ens_lptcpl = lptcoupler(src_grp=this%sim_pg%group,                   &
+      dst_grp=this%ens_grp, name='HITPARTSLICE')
     call this%ens_cpl%set_src(this%fft_pg)
-    if (this%in_ens_grp) call this%ens_cpl%set_dst(this%ens_cfg)
+    call this%ens_lptcpl%set_src(this%ps)
+    if (this%in_ens_grp) then
+      call this%ens_cpl%set_dst(this%ens_cfg)
+      call this%ens_lptcpl%set_dst(this%ens_lpt)
+    end if
     call this%ens_cpl%initialize()
-    if (this%in_ens_grp) this%ens_out = ensight(cfg=this%ens_cfg,             &
-      name='HITFILTSLICE')
+    call this%ens_lptcpl%initialize()
+    if (this%in_ens_grp) then
+      this%ens_out = ensight(cfg=this%ens_cfg, name='hitslice')
+      call this%ens_out%add_particle('partslice', this%ens_pmesh)
+    end if
 
     do n = 1, this%num_filters
       flt => this%filters(n)
@@ -711,33 +754,26 @@ contains
 
   end subroutine filterset_write_ensight
 
-  subroutine filterset_compute_stats(this, step, ps, rho, visc, U, V, W, sx, sy, sz)
+  subroutine filterset_compute_stats(this, step)
     implicit none
     class(filterset), intent(inout) :: this
     integer, intent(in) :: step
-    type(lpt), intent(inout) :: ps
-    real(WP), intent(in) :: rho(this%sim_pg%imino_:,this%sim_pg%jmino_:,       &
-      this%sim_pg%kmino_:), visc(this%sim_pg%imino_:,this%sim_pg%jmino_:,      &
-      this%sim_pg%kmino_:), U(this%sim_pg%imino_:,this%sim_pg%jmino_:,         &
-      this%sim_pg%kmino_:), V(this%sim_pg%imino_:,this%sim_pg%jmino_:,         &
-      this%sim_pg%kmino_:), W(this%sim_pg%imino_:,this%sim_pg%jmino_:,         &
-      this%sim_pg%kmino_:), sx(this%sim_pg%imino_:,this%sim_pg%jmino_:,        &
-      this%sim_pg%kmino_:), sy(this%sim_pg%imino_:,this%sim_pg%jmino_:,        &
-      this%sim_pg%kmino_:), sz(this%sim_pg%imino_:,this%sim_pg%jmino_:,        &
-      this%sim_pg%kmino_:)
-    integer :: m, n
+    integer, dimension(3) :: ind
+    integer :: m, n, i
 
-    call compute_micro_stats(this%sim_pg, this%fft%pg, this%mstats, ps, step, &
-      rho, visc, U, V, W, sx, sy, sz, this%phi, this%up, this%uf)
+    call compute_micro_stats(this%sim_pg, this%fft%pg, this%mstats, this%ps,  &
+      step, this%rhof, this%visc, this%U, this%V, this%W, this%sx, this%sy,   &
+      this%sz, this%phi, this%up, this%uf)
 
-    call filter_ffts_forward(this%fft, this%phi, this%up, this%uf,             &
+    call filter_ffts_forward(this%fft, this%phi, this%up, this%uf,            &
       this%phi_in_f, this%up_in_f, this%uf_in_f)
 
     do n = 1, this%num_filters
-      call compute_filter_stats(this%filters(n)%fstats, this%fft,              &
-        this%filters(n), step, this%phi_in_f, this%up_in_f, this%uf_in_f,      &
+      call compute_filter_stats(this%filters(n)%fstats, this%fft,             &
+        this%filters(n), step, this%phi_in_f, this%up_in_f, this%uf_in_f,     &
         this%phi, this%phicheck, this%up, this%uf, this%work_r, this%work_c)
       if (this%filters(n)%use_ensight) then
+        ! transfer continuum properties
         call this%ens_cpl%push(this%phi)
         call this%ens_cpl%transfer()
         if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_phi)
@@ -749,6 +785,25 @@ contains
           call this%ens_cpl%transfer()
           if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_uf(:,:,:,m))
         end do
+        ! transfer particle properties to lpt
+        call this%ens_lptcpl%push()
+        call this%ens_lptcpl%transfer()
+        if (this%in_ens_grp) call this%ens_lptcpl%pull()
+        ! transfer particles to pmesh
+        if (this%in_ens_grp) then
+          call this%ens_pmesh%reset()
+          call this%ens_pmesh%set_size(this%ens_lpt%np_)
+          do i = 1, this%ens_lpt%np_
+            this%ens_pmesh%pos(:,i) = this%ens_lpt%p(i)%pos
+            this%ens_pmesh%var(1,i) = this%ens_lpt%p(i)%id
+            this%ens_pmesh%var(2,i) = this%ens_lpt%p(i)%d
+            this%ens_pmesh%vec(:,1,i) = this%ens_lpt%p(i)%vel
+            ind = this%ps%cfg%get_ijk_global(this%ens_lpt%p(i)%pos)
+            this%ens_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
+              pos=this%ens_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
+              U=this%U, V=this%V, W=this%W)
+          end do
+        end if
       end if
     end do
 

@@ -261,18 +261,17 @@ contains
     end block bcast_dsg
 
     ! set rank map from destination index to global and destination ranks
-    allocate(                                                                 &
-      this%rankmap(this%dsg%imin:this%dsg%imax,this%dsg%jmin:this%dsg%jmax,   &
-      this%dsg%kmin:this%dsg%kmax), this%drankmap(this%dsg%imin:this%dsg%imax,&
-      this%dsg%jmin:this%dsg%jmax,this%dsg%kmin:this%dsg%kmax)                &
-      )
+    allocate(this%rankmap(this%dsg%imino:this%dsg%imaxo,                      &
+      this%dsg%jmino:this%dsg%jmaxo,this%dsg%kmino:this%dsg%kmaxo),           &
+      this%drankmap(this%dsg%imino:this%dsg%imaxo,                            &
+      this%dsg%jmino:this%dsg%jmaxo,this%dsg%kmino:this%dsg%kmaxo))
     if (this%drank .eq. 0) then
-      do k = this%dst%cfg%kmin, this%dst%cfg%kmax
-        do j = this%dst%cfg%jmin, this%dst%cfg%jmax
-          do i = this%dst%cfg%imin, this%dst%cfg%imax
+      do k = this%dst%cfg%kmino, this%dst%cfg%kmaxo
+        do j = this%dst%cfg%jmino, this%dst%cfg%jmaxo
+          do i = this%dst%cfg%imino, this%dst%cfg%imaxo
             this%rankmap(i,j,k) = this%dst%cfg%get_rank((/ i, j, k /))
           end do
-          call mpi_group_translate_ranks(this%grp, this%dst%cfg%nx + 1,       &
+          call mpi_group_translate_ranks(this%grp, this%dst%cfg%nxo,          &
             this%rankmap(:,j,k), this%dgrp, this%drankmap(:,j,k), ierr)
         end do
       end do

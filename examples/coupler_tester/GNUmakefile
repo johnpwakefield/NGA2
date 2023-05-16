@@ -4,9 +4,9 @@ NGA_HOME ?= ../..
 # Compilation parameters
 PRECISION = DOUBLE
 USE_MPI   = TRUE
-USE_HYPRE = TRUE
-USE_LAPACK= TRUE
-USE_IRL   = TRUE
+USE_HYPRE = FALSE
+USE_LAPACK= FALSE
+USE_IRL   = FALSE
 PROFILE   = FALSE
 DEBUG     = TRUE
 COMP      = gnu
@@ -28,7 +28,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := particles core data solver config grid libraries
+Bdirs   := core data solver config grid libraries particles
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

@@ -72,12 +72,10 @@ module coupler_class
       procedure :: transfer                               !< Routine that performs the src->dst data transfer
    end type coupler
    
-   
    !> Declare coupler constructor
-   interface coupler
-      procedure construct_from_two_groups
-   end interface coupler
-   
+   interface coupler; procedure construct_from_two_groups; end interface coupler;
+
+
 contains
    
    
@@ -198,7 +196,7 @@ contains
          call MPI_BCAST(this%dnpy,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
          call MPI_BCAST(this%dnpz,1             ,MPI_INTEGER  ,this%droot,this%comm,ierr)
          call MPI_BCAST(this%dnproc,1           ,MPI_INTEGER  ,this%droot,this%comm,ierr)
-         
+
          ! Allocate x/y/z, fill it, and bcast
          allocate(x(1:nx+1),y(1:ny+1),z(1:nz+1))
          if (this%rank.eq.this%droot) then
@@ -233,10 +231,10 @@ contains
          end if
          
          ! Broadcast it to our group
-         call MPI_BCAST(this%dnpx,  1,MPI_INTEGER,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnpy,  1,MPI_INTEGER,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnpz,  1,MPI_INTEGER,this%droot,this%comm,ierr)
-         call MPI_BCAST(this%dnproc,1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dst%npx,  1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dst%npy,  1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dst%npz,  1,MPI_INTEGER,this%droot,this%comm,ierr)
+         call MPI_BCAST(this%dst%nproc,1,MPI_INTEGER,this%droot,this%comm,ierr)
          
          ! Prepare communication arrays
          allocate(diproc(0:this%nproc-1),djproc(0:this%nproc-1),dkproc(0:this%nproc-1))

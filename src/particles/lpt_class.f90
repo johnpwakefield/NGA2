@@ -11,7 +11,7 @@ module lpt_class
 
 
   ! Expose type/constructor/methods
-  public :: lpt, part
+  public :: lpt, part, MPI_PART, MPI_PART_SIZE
 
 
   !> Memory adaptation parameter
@@ -1923,10 +1923,11 @@ contains
 
 
   !> Adaptation of particle array size
-  subroutine resize(this,n)
+  subroutine resize(this,n,dontshrink)
     implicit none
     class(lpt), intent(inout) :: this
     integer, intent(in) :: n
+    logical, optional :: dontshrink
     type(part), dimension(:), allocatable :: tmp
     integer :: size_now,size_new
     ! Resize particle array to size n
@@ -1944,6 +1945,9 @@ contains
           tmp(size_now+1:)%flag=1
           call move_alloc(tmp,this%p)
        else if (n.lt.int(real(size_now,WP)*coeff_dn)) then
+          if (present(dontshrink)) then
+            if (dontshrink .eqv. .true.) return
+         end if
           allocate(tmp(n))
           tmp(1:n)=this%p(1:n)
           call move_alloc(tmp,this%p)

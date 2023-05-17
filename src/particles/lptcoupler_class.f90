@@ -1,7 +1,7 @@
 !> Adds particle coupling to an existing coupler
 module lptcoupler_class
   use precision,      only: WP
-  use mpi_f08,        only: MPI_Comm, MPI_Group
+  use mpi_f08,        only: MPI_Comm, MPI_Group, MPI_UNDEFINED
   use string,         only: str_medium
   use sgrid_class,    only: sgrid
   use config_class,   only: config
@@ -14,6 +14,7 @@ module lptcoupler_class
   
   ! buffer sizing behavior
   real(WP), parameter :: MEM_ADJ_UP = 1.3_WP          !< Particle array size increase factor
+  !TODO add buffer shrinking
   real(WP), parameter :: MEM_ADJ_DN = 0.7_WP          !< Particle array size decrease factor
 
   !> Coupler object definition
@@ -25,9 +26,10 @@ module lptcoupler_class
     ! source and destination lpt objects
     type(lpt), pointer :: src, dst
 
-    ! destination pgrid (needed on all processes for particle localization)
+    ! destination sgrid (needed on all processes for particle localization)
     class(sgrid), pointer :: dsg
-    integer, dimension(:,:,:), allocatable :: rankmap, drankmap
+    integer, dimension(:,:,:), allocatable :: urankmap !< map from destination cell to ugrp rank
+    integer, dimension(:,:,:), allocatable :: drankmap !< map from destination cell to dgrp rank
 
     ! bounding corners of overlap region
     real(WP), dimension(3) :: olapmin, olapmax
@@ -37,10 +39,9 @@ module lptcoupler_class
 
     ! This is our communication information
     type(MPI_Comm) :: comm                            !< Intracommunicator over (at least) the union of both groups
-    type(MPI_Group) :: cgrp                           !< Group for whole communicator
-    type(MPI_Group) :: sgrp, dgrp, grp                !< Source and destination groups and their union
-    integer :: np, snp, dnp, rank, srank, drank       !< number of processors and ranks on each group
-    integer :: sroot, droot                           !< union rank of source and destination roots
+    type(MPI_Group) :: sgrp, dgrp, ugrp               !< Source and destination groups and their union
+    integer :: unp, snp, dnp, urank, srank, drank     !< number of processors and ranks on each group
+    integer :: uroot, sroot, droot                    !< union rank of the root of each group
 
     ! Memory adaptation parameters and send/receive buffers
     !   there are gaps in the send buffer        (offsets at multiples of dnp)
@@ -66,7 +67,7 @@ module lptcoupler_class
     procedure :: set_src                              !< Sets the source
     procedure :: set_dst                              !< Sets the destination
     procedure :: initialize                           !< Allocate buffers
-    procedure :: in_overlap                           !< Check if in overlap region
+    procedure :: in_overlap                           !< Check if a point is in the overlap region
     procedure :: push                                 !< Src routine that pushes a field into our send data storage
     procedure :: pull                                 !< Dst routine that pulls a field from our received data storage
     procedure :: transfer                             !< Routine that performs the src->dst data transfer
@@ -85,8 +86,7 @@ contains
     use messager, only: die
     use parallel, only: comm
     use mpi_f08, only: MPI_GROUP_UNION, MPI_COMM_CREATE_GROUP, MPI_COMM_GROUP,&
-      MPI_GROUP_RANK, MPI_GROUP_SIZE, MPI_COMM_RANK, MPI_UNDEFINED,           &
-      MPI_GROUP_TRANSLATE_RANKS
+      MPI_GROUP_RANK, MPI_GROUP_SIZE, MPI_COMM_RANK, MPI_GROUP_TRANSLATE_RANKS
     implicit none
     type(lptcoupler) :: self
     type(MPI_Group), intent(in) :: src_grp, dst_grp
@@ -99,22 +99,27 @@ contains
 
     ! Build group union
     self%sgrp = src_grp; self%dgrp = dst_grp;
-    call MPI_GROUP_UNION(self%sgrp, self%dgrp, self%grp, ierr)
+    call MPI_GROUP_UNION(self%sgrp, self%dgrp, self%ugrp, ierr)
 
     ! Set ranks and number of processors
-    call MPI_GROUP_SIZE(self%grp, self%np, ierr)
     call MPI_GROUP_SIZE(self%sgrp, self%snp, ierr)
     call MPI_GROUP_SIZE(self%dgrp, self%dnp, ierr)
-    call MPI_GROUP_RANK(self%grp, self%rank, ierr)
     call MPI_GROUP_RANK(self%sgrp, self%srank, ierr)
     call MPI_GROUP_RANK(self%dgrp, self%drank, ierr)
-    call MPI_GROUP_TRANSLATE_RANKS(self%sgrp, 1, (/ 0 /), self%grp, ranks(1:1))
-    call MPI_GROUP_TRANSLATE_RANKS(self%dgrp, 1, (/ 0 /), self%grp, ranks(2:2))
-    self%sroot = ranks(1); self%droot = ranks(2);
 
     ! Create intracommunicator for the new group
-    call MPI_COMM_CREATE_GROUP(comm, self%grp, 0, self%comm, ierr)
-    call MPI_COMM_GROUP(self%comm, self%cgrp, ierr)
+    call MPI_COMM_CREATE_GROUP(comm, self%ugrp, 0, self%comm, ierr)
+    call MPI_COMM_GROUP(self%comm, self%ugrp, ierr)
+
+    ! get ranks and number of processors in this new group
+    call MPI_GROUP_SIZE(self%ugrp, self%unp, ierr)
+    call MPI_GROUP_RANK(self%ugrp, self%urank, ierr)
+    call MPI_GROUP_TRANSLATE_RANKS(self%sgrp, 1, (/ 0 /), self%ugrp, ranks(1:1))
+    call MPI_GROUP_TRANSLATE_RANKS(self%dgrp, 1, (/ 0 /), self%ugrp, ranks(2:2))
+    self%uroot = 0; self%sroot = ranks(1); self%droot = ranks(2);
+
+    ! check ranks in the union group and the union communicator are the same
+    call check_ranks_equal(self%comm, self%ugrp)
 
     ! Default to no src or dst
     self%have_src = .false.; self%have_dst = .false.;
@@ -183,13 +188,12 @@ contains
   !> Allocate buffers
   subroutine initialize(this)
     use messager, only: warn, die
-    use mpi_f08,  only: MPI_UNDEFINED, mpi_allreduce, MPI_MIN, MPI_MAX,       &
-      MPI_INTEGER, MPI_LOGICAL, mpi_bcast
+    use mpi_f08,  only: mpi_allreduce, MPI_MIN, MPI_MAX,                      &
+      MPI_INTEGER, MPI_LOGICAL, mpi_bcast, mpi_group_translate_ranks
     use parallel, only: MPI_REAL_WP
     implicit none
     class(lptcoupler), intent(inout) :: this
     real(WP), dimension(3) :: bcorner, tcorner
-    type(sgrid), pointer :: sgptr
     integer :: i, j, k, ierr
 
     if (this%srank .ne. MPI_UNDEFINED .and. .not. this%have_src) call die('[lptcoupler] source grid has not been set')
@@ -218,33 +222,30 @@ contains
       tcorner(2) = min(this%dst%cfg%y(this%dst%cfg%jmax+1), tcorner(2))
       tcorner(3) = min(this%dst%cfg%z(this%dst%cfg%kmax+1), tcorner(3))
     end if
-    call MPI_ALLREDUCE(bcorner, this%olapmin, 3, MPI_REAL_WP, MPI_MAX, this%comm, ierr)
-    call MPI_ALLREDUCE(tcorner, this%olapmax, 3, MPI_REAL_WP, MPI_MIN, this%comm, ierr)
-    if (any(this%olapmin .gt. this%olapmax)) then
+    call mpi_allreduce(bcorner, this%olapmin, 3, MPI_REAL_WP, MPI_MAX,        &
+      this%comm, ierr)
+    call mpi_allreduce(tcorner, this%olapmax, 3, MPI_REAL_WP, MPI_MIN,        &
+      this%comm, ierr)
+    if (any(this%olapmin .gt. this%olapmax))                                  &
       call die('[lptcoupler] no overlap between source and destination grids')
-    end if
 
     ! set destination grid on all processes
     bcast_dsg : block
       integer, dimension(5) :: intparams
       real(WP), dimension(:), pointer :: x, y, z
       logical, dimension(3) :: pers
-      if (this%rank .eq. this%droot) then
-        intparams(1) = this%dst%cfg%coordsys
-        intparams(2) = this%dst%cfg%no
-        intparams(3) = this%dst%cfg%nx
-        intparams(4) = this%dst%cfg%ny
-        intparams(5) = this%dst%cfg%nz
-        pers(1) = this%dst%cfg%xper
-        pers(2) = this%dst%cfg%yper
-        pers(3) = this%dst%cfg%zper
+      type(sgrid), pointer :: sgptr
+      if (this%urank .eq. this%droot) then
+        intparams = (/ this%dst%cfg%coordsys, this%dst%cfg%no,                &
+          this%dst%cfg%nx, this%dst%cfg%ny, this%dst%cfg%nz /)
+        pers = (/ this%dst%cfg%xper, this%dst%cfg%yper, this%dst%cfg%zper /)
         x => this%dst%cfg%x(this%dst%cfg%imin:this%dst%cfg%imax+1)
         y => this%dst%cfg%y(this%dst%cfg%jmin:this%dst%cfg%jmax+1)
         z => this%dst%cfg%z(this%dst%cfg%kmin:this%dst%cfg%kmax+1)
       end if
       call mpi_bcast(intparams, 5, MPI_INTEGER, this%droot, this%comm, ierr)
       call mpi_bcast(pers, 3, MPI_LOGICAL, this%droot, this%comm, ierr)
-      if (this%rank .ne. this%droot)                                          &
+      if (this%urank .ne. this%droot)                                         &
         allocate(x(intparams(3)+1), y(intparams(4)+1), z(intparams(5)+1))
       call mpi_bcast(x, intparams(3)+1, MPI_REAL_WP, this%droot, this%comm, ierr)
       call mpi_bcast(y, intparams(4)+1, MPI_REAL_WP, this%droot, this%comm, ierr)
@@ -257,40 +258,39 @@ contains
           pers(3), 'dstgcopy')
         this%dsg => sgptr
       end if
-      if (this%rank .ne. this%droot) deallocate(x, y, z)
+      if (this%urank .ne. this%droot) deallocate(x, y, z)
     end block bcast_dsg
 
-    ! set rank map from destination index to global and destination ranks
-    allocate(this%rankmap(this%dsg%imino:this%dsg%imaxo,                      &
-      this%dsg%jmino:this%dsg%jmaxo,this%dsg%kmino:this%dsg%kmaxo),           &
-      this%drankmap(this%dsg%imino:this%dsg%imaxo,                            &
+    ! set rank map from destination index to global rank
+    allocate(this%urankmap(this%dsg%imino:this%dsg%imaxo,                     &
+      this%dsg%jmino:this%dsg%jmaxo,this%dsg%kmino:this%dsg%kmaxo))
+    allocate(this%drankmap(this%dsg%imino:this%dsg%imaxo,                     &
       this%dsg%jmino:this%dsg%jmaxo,this%dsg%kmino:this%dsg%kmaxo))
     if (this%drank .eq. 0) then
       do k = this%dst%cfg%kmino, this%dst%cfg%kmaxo
         do j = this%dst%cfg%jmino, this%dst%cfg%jmaxo
           do i = this%dst%cfg%imino, this%dst%cfg%imaxo
-            this%rankmap(i,j,k) = this%dst%cfg%get_rank((/ i, j, k /))
+            this%drankmap(i,j,k) = this%dst%cfg%get_rank((/ i, j, k /))
           end do
-          call mpi_group_translate_ranks(this%grp, this%dst%cfg%nxo,          &
-            this%rankmap(:,j,k), this%dgrp, this%drankmap(:,j,k), ierr)
+          call mpi_group_translate_ranks(this%dgrp, this%dst%cfg%nxo,         &
+            this%drankmap(:,j,k), this%ugrp, this%urankmap(:,j,k))
         end do
       end do
     end if
-    call mpi_bcast(this%rankmap, this%dsg%nx*this%dsg%ny*this%dsg%nz,       &
+    call mpi_bcast(this%urankmap, this%dsg%nxo*this%dsg%nyo*this%dsg%nzo,     &
+      MPI_INTEGER, this%droot, this%comm, ierr)
+    call mpi_bcast(this%drankmap, this%dsg%nxo*this%dsg%nyo*this%dsg%nzo,     &
       MPI_INTEGER, this%droot, this%comm, ierr)
 
     ! allocate memory
-    allocate(this%sendcounts(this%np), this%recvcounts(this%np))
+    allocate(this%sendcounts(this%unp), this%recvcounts(this%unp))
     call this%push(only_count=.true.)
     this%sendbufsize = ceiling(MEM_ADJ_UP * maxval(this%sendcounts))
-    ! as an initial guess, assume the number of particles per processor are
-    ! similar in the two domains; if not this will be fixed at the first transfer
-    this%recvbufsize = this%sendbufsize
-    allocate(this%sendbuf(this%sendbufsize*this%dnp), this%recvbuf(this%recvbufsize))
+    allocate(this%sendbuf(this%sendbufsize*this%dnp))
+    this%recvbufsize = 0; allocate(this%recvbuf(this%recvbufsize));
 
     this%initialized = .true.
-
-    if (this%rank .eq. 0) write(*,*) '[lptcoupler] initialized'
+    if (this%urank .eq. 0) write(*,*) '[lptcoupler] initialized'
 
   end subroutine initialize
 
@@ -301,7 +301,12 @@ contains
 
     if (.not. this%initialized) return
 
-    deallocate(this%sendcounts, this%recvcounts, this%sendbuf, this%recvbuf)
+    deallocate(this%urankmap, this%drankmap, this%sendcounts,                 &
+      this%recvcounts, this%sendbuf, this%recvbuf)
+
+    if (this%drank .eq. MPI_UNDEFINED) deallocate(this%dsg)
+
+    this%initialized = .false.
 
   end subroutine finalize
 
@@ -311,12 +316,11 @@ contains
   ! case; lpt is not modified, the send buffer is updated, and no communication
   ! is conducted.
   subroutine push(this, only_count)
-    use mpi_f08, only: MPI_UNDEFINED
     implicit none
     class(lptcoupler), intent(inout) :: this
     logical, intent(in), optional :: only_count
     logical :: only_count_actual
-    integer :: i, j, rank, drank, os, ns, oe, ne, oldbufsize
+    integer :: i, j, urank, drank, os, ns, oe, ne, oldbufsize
     integer, dimension(3) :: dstind
     type(part), dimension(:), pointer :: oldbuf
 
@@ -330,9 +334,9 @@ contains
     do i = 1, this%src%np_
       if (.not. this%in_overlap(this%src%p(i)%pos)) cycle
       dstind = this%dsg%get_ijk_global(this%src%p(i)%pos)
-      rank = this%rankmap(dstind(1), dstind(2), dstind(3))
+      urank = this%urankmap(dstind(1), dstind(2), dstind(3))
       drank = this%drankmap(dstind(1), dstind(2), dstind(3))
-      this%sendcounts(rank+1) = this%sendcounts(rank+1) + 1
+      this%sendcounts(urank+1) = this%sendcounts(urank+1) + 1
       if (.not. only_count_actual) then
         if (maxval(this%sendcounts) .gt. this%sendbufsize) then
           oldbufsize = this%sendbufsize; oldbuf => this%sendbuf;
@@ -345,7 +349,7 @@ contains
           end do
           deallocate(oldbuf)
         end if
-        j = this%sendbufsize * drank + this%sendcounts(rank+1)
+        j = this%sendbufsize * drank + this%sendcounts(urank+1)
         this%sendbuf(j) = this%src%p(i)
         this%sendbuf(j)%ind = dstind
         this%src%p(i)%flag = this%srcflag
@@ -359,6 +363,8 @@ contains
     implicit none
     class(lptcoupler), intent(inout) :: this
     integer :: i, recv_tot
+
+    if (this%drank .eq. MPI_UNDEFINED) return
 
     if (this%dstflag .ne. 0) then
       do i = 1, this%dst%np_
@@ -381,15 +387,16 @@ contains
 
   !> Routine that transfers the data from src to dst - both src_group and dst_group processors need to call
   subroutine transfer(this)
-    use mpi_f08,   only: MPI_UNDEFINED, MPI_INTEGER, MPI_ALLTOALL, MPI_ALLTOALLv
+    use mpi_f08,   only: MPI_INTEGER, MPI_ALLTOALL, MPI_ALLTOALLv
     use lpt_class, only: MPI_PART
     implicit none
     class(lptcoupler), intent(inout) :: this
-    integer, dimension(this%np) :: senddisps, recvdisps
+    integer, dimension(this%unp) :: senddisps, recvdisps, uranks, dranks
     integer :: i, ierr
 
     ! send sizes
-    call MPI_ALLTOALL(this%sendcounts,1,MPI_INTEGER,this%recvcounts,1,MPI_INTEGER,this%comm,ierr)
+    call MPI_ALLTOALL(this%sendcounts, 1, MPI_INTEGER, this%recvcounts, 1,    &
+      MPI_INTEGER, this%comm, ierr)
 
     ! resize recieve buffer if needed
     if (sum(this%recvcounts) .gt. this%recvbufsize) then
@@ -398,15 +405,23 @@ contains
     end if
 
     ! compute send displacements
-    senddisps(1) = 0
-    do i = 2, this%np
-      senddisps(i) = senddisps(i-1)
-      if (this%srank .ne. MPI_UNDEFINED) senddisps(i) = senddisps(i) + this%sendbufsize
-    end do
+    if (this%srank .eq. MPI_UNDEFINED) then
+      senddisps(:) = 0
+    else
+      uranks(:) = (/ (i - 1, i = 1, this%unp) /)
+      call mpi_group_translate_ranks(this%ugrp, this%unp, uranks, this%dgrp,  &
+        dranks, ierr)
+      senddisps(1) = 0
+      do i = 2, this%unp
+        senddisps(i) = senddisps(i-1)
+        if (dranks(i) .ne. MPI_UNDEFINED)                                     &
+          senddisps(i) = senddisps(i) + this%sendbufsize
+      end do
+    end if
 
     ! compute recieve displacements
     recvdisps(1) = 0
-    recvdisps(2:this%np) = (/ (sum(this%recvcounts(1:i)), i = 1, this%np - 1) /)
+    recvdisps(2:this%unp) = (/ (sum(this%recvcounts(1:i)), i = 1, this%unp - 1) /)
 
     ! send particles    
     call MPI_ALLTOALLv(this%sendbuf, this%sendcounts, senddisps, MPI_PART,    &

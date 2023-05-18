@@ -1,7 +1,7 @@
 !> Adds particle coupling to an existing coupler
 module lptcoupler_class
   use precision,      only: WP
-  use mpi_f08,        only: MPI_Comm, MPI_Group, MPI_UNDEFINED
+  use mpi_f08,        only: MPI_COMM, MPI_GROUP, MPI_UNDEFINED
   use string,         only: str_medium
   use sgrid_class,    only: sgrid
   use config_class,   only: config
@@ -38,8 +38,8 @@ module lptcoupler_class
     logical :: have_src, have_dst, initialized
 
     ! This is our communication information
-    type(MPI_Comm) :: comm                            !< Intracommunicator over (at least) the union of both groups
-    type(MPI_Group) :: sgrp, dgrp, ugrp               !< Source and destination groups and their union
+    type(MPI_COMM) :: comm                            !< Intracommunicator over (at least) the union of both groups
+    type(MPI_GROUP) :: sgrp, dgrp, ugrp               !< Source and destination groups and their union
     integer :: unp, snp, dnp, urank, srank, drank     !< number of processors and ranks on each group
     integer :: uroot, sroot, droot                    !< union rank of the root of each group
 
@@ -85,11 +85,11 @@ contains
   function construct_from_two_groups(src_grp, dst_grp, name) result(self)
     use messager, only: die
     use parallel, only: comm
-    use mpi_f08, only: MPI_GROUP_UNION, MPI_COMM_CREATE_GROUP, MPI_COMM_GROUP,&
-      MPI_GROUP_RANK, MPI_GROUP_SIZE, MPI_COMM_RANK, MPI_GROUP_TRANSLATE_RANKS
+    use mpi_f08, only: mpi_group_union, mpi_comm_create_group, mpi_comm_group,&
+      mpi_group_rank, mpi_group_size, mpi_comm_rank, mpi_group_translate_ranks
     implicit none
     type(lptcoupler) :: self
-    type(MPI_Group), intent(in) :: src_grp, dst_grp
+    type(MPI_GROUP), intent(in) :: src_grp, dst_grp
     character(len=*), intent(in) :: name
     integer, dimension(2) :: ranks
     integer :: ierr
@@ -99,23 +99,23 @@ contains
 
     ! Build group union
     self%sgrp = src_grp; self%dgrp = dst_grp;
-    call MPI_GROUP_UNION(self%sgrp, self%dgrp, self%ugrp, ierr)
+    call mpi_group_union(self%sgrp, self%dgrp, self%ugrp, ierr)
 
     ! Set ranks and number of processors
-    call MPI_GROUP_SIZE(self%sgrp, self%snp, ierr)
-    call MPI_GROUP_SIZE(self%dgrp, self%dnp, ierr)
-    call MPI_GROUP_RANK(self%sgrp, self%srank, ierr)
-    call MPI_GROUP_RANK(self%dgrp, self%drank, ierr)
+    call mpi_group_size(self%sgrp, self%snp, ierr)
+    call mpi_group_size(self%dgrp, self%dnp, ierr)
+    call mpi_group_rank(self%sgrp, self%srank, ierr)
+    call mpi_group_rank(self%dgrp, self%drank, ierr)
 
     ! Create intracommunicator for the new group
-    call MPI_COMM_CREATE_GROUP(comm, self%ugrp, 0, self%comm, ierr)
-    call MPI_COMM_GROUP(self%comm, self%ugrp, ierr)
+    call mpi_comm_create_group(comm, self%ugrp, 0, self%comm, ierr)
+    call mpi_comm_group(self%comm, self%ugrp, ierr)
 
     ! get ranks and number of processors in this new group
-    call MPI_GROUP_SIZE(self%ugrp, self%unp, ierr)
-    call MPI_GROUP_RANK(self%ugrp, self%urank, ierr)
-    call MPI_GROUP_TRANSLATE_RANKS(self%sgrp, 1, (/ 0 /), self%ugrp, ranks(1:1))
-    call MPI_GROUP_TRANSLATE_RANKS(self%dgrp, 1, (/ 0 /), self%ugrp, ranks(2:2))
+    call mpi_group_size(self%ugrp, self%unp, ierr)
+    call mpi_group_rank(self%ugrp, self%urank, ierr)
+    call mpi_group_translate_ranks(self%sgrp, 1, (/ 0 /), self%ugrp, ranks(1:1))
+    call mpi_group_translate_ranks(self%dgrp, 1, (/ 0 /), self%ugrp, ranks(2:2))
     self%uroot = 0; self%sroot = ranks(1); self%droot = ranks(2);
 
     ! check ranks in the union group and the union communicator are the same
@@ -142,7 +142,6 @@ contains
 
   !> Set the destination lpt
   subroutine set_dst(this, ps)
-    use mpi_f08, only: MPI_COMM_RANK
     use messager, only: warn
     implicit none
     class(lptcoupler), intent(inout) :: this
@@ -160,15 +159,15 @@ contains
 
   !> Function to check ranks are equal between a group and a communicator
   subroutine check_ranks_equal(comm, group)
-    use mpi_f08, only: MPI_COMM_RANK, MPI_GROUP_RANK
+    use mpi_f08, only: mpi_comm_rank, mpi_group_rank
     use messager, only: die
     implicit none
-    type(MPI_Comm), intent(in) :: comm
-    type(MPI_Group), intent(in) :: group
+    type(MPI_COMM), intent(in) :: comm
+    type(MPI_GROUP), intent(in) :: group
     integer :: rank1, rank2, ierr
 
-    call MPI_COMM_RANK(comm, rank1, ierr)
-    call MPI_GROUP_RANK(group, rank2, ierr)
+    call mpi_comm_rank(comm, rank1, ierr)
+    call mpi_group_rank(group, rank2, ierr)
     if (rank1 .ne. rank2) call die('[lptcoupler] rank mismatch between cgrp and comm')
 
   end subroutine check_ranks_equal
@@ -338,12 +337,12 @@ contains
       drank = this%drankmap(dstind(1), dstind(2), dstind(3))
       this%sendcounts(urank+1) = this%sendcounts(urank+1) + 1
       if (.not. only_count_actual) then
-        if (maxval(this%sendcounts) .gt. this%sendbufsize) then
+        if (this%sendcounts(urank+1) .gt. this%sendbufsize) then
           oldbufsize = this%sendbufsize; oldbuf => this%sendbuf;
-          this%sendbufsize = ceiling(maxval(this%sendcounts) * this%dnp * MEM_ADJ_UP)
-          nullify(this%sendbuf); allocate(this%sendbuf(this%sendbufsize));
+          this%sendbufsize = ceiling(maxval(this%sendcounts) * MEM_ADJ_UP)
+          nullify(this%sendbuf); allocate(this%sendbuf(this%dnp * this%sendbufsize));
           do j = 1, this%dnp
-            os = 1 + oldbufsize * (j - 1); oe = os + oldbufsize - 1;
+            os = 1 + oldbufsize * (j - 1);       oe = os + oldbufsize - 1;
             ns = 1 + this%sendbufsize * (j - 1); ne = os + oldbufsize - 1;
             this%sendbuf(ns:ne) = oldbuf(os:oe)
           end do
@@ -387,7 +386,7 @@ contains
 
   !> Routine that transfers the data from src to dst - both src_group and dst_group processors need to call
   subroutine transfer(this)
-    use mpi_f08,   only: MPI_INTEGER, MPI_ALLTOALL, MPI_ALLTOALLv
+    use mpi_f08,   only: MPI_INTEGER, mpi_alltoall, mpi_alltoallv
     use lpt_class, only: MPI_PART
     implicit none
     class(lptcoupler), intent(inout) :: this
@@ -395,7 +394,7 @@ contains
     integer :: i, ierr
 
     ! send sizes
-    call MPI_ALLTOALL(this%sendcounts, 1, MPI_INTEGER, this%recvcounts, 1,    &
+    call mpi_alltoall(this%sendcounts, 1, MPI_INTEGER, this%recvcounts, 1,    &
       MPI_INTEGER, this%comm, ierr)
 
     ! resize recieve buffer if needed
@@ -420,11 +419,10 @@ contains
     end if
 
     ! compute recieve displacements
-    recvdisps(1) = 0
-    recvdisps(2:this%unp) = (/ (sum(this%recvcounts(1:i)), i = 1, this%unp - 1) /)
+    recvdisps(:) = (/ (sum(this%recvcounts(1:i)), i = 0, this%unp - 1) /)
 
     ! send particles    
-    call MPI_ALLTOALLv(this%sendbuf, this%sendcounts, senddisps, MPI_PART,    &
+    call mpi_alltoallv(this%sendbuf, this%sendcounts, senddisps, MPI_PART,    &
                        this%recvbuf, this%recvcounts, recvdisps, MPI_PART,    &
                        this%comm, ierr)
 

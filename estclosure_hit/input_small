@@ -1,12 +1,12 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	4 1 1
 
 # Mesh definition
 Lx :	1.0
 nx :	32 32 32
 
 # Particle Parameters
-Number of particles :   20000
+Number of particles :   2000000
 
 # Steady-state (forcing) parameters
 Forcing constant : 60.0

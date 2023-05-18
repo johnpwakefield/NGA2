@@ -343,7 +343,7 @@ contains
           nullify(this%sendbuf); allocate(this%sendbuf(this%dnp * this%sendbufsize));
           do j = 1, this%dnp
             os = 1 + oldbufsize * (j - 1);       oe = os + oldbufsize - 1;
-            ns = 1 + this%sendbufsize * (j - 1); ne = os + oldbufsize - 1;
+            ns = 1 + this%sendbufsize * (j - 1); ne = ns + oldbufsize - 1;
             this%sendbuf(ns:ne) = oldbuf(os:oe)
           end do
           deallocate(oldbuf)

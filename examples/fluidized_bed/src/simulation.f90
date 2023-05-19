@@ -3,8 +3,8 @@ module simulation
   use precision,         only: WP
   use geometry,          only: cfg
   use lpt_class,         only: lpt
-  use hypre_uns_class,   only: hypre_uns
-  use hypre_str_class,   only: hypre_str
+  use fft2d_class,       only: fft2d
+  use ddadi_class,       only: ddadi
   use lowmach_class,     only: lowmach
   use timetracker_class, only: timetracker
   use ensight_class,     only: ensight
@@ -15,8 +15,8 @@ module simulation
   private
   
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker, plus a couple of linear solvers
-  type(hypre_uns),   public :: ps
-  type(hypre_str),   public :: vs
+  type(fft2d),       public :: ps
+  type(ddadi),       public :: vs
   type(lowmach),     public :: fs
   type(lpt),         public :: lp
   type(timetracker), public :: time
@@ -100,8 +100,6 @@ contains
 
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use hypre_uns_class, only: gmres_amg  
-      use hypre_str_class, only: pcg_pfmg
       use lowmach_class,   only: dirichlet,clipped_neumann
       ! Create flow solver
       fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
@@ -115,13 +113,9 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      ps=hypre_uns(cfg=cfg,name='Pressure',method=gmres_amg,nst=7)
-      call param_read('Pressure iteration',ps%maxit)
-      call param_read('Pressure tolerance',ps%rcvg)
+      ps=fft2d(cfg=cfg,name='Pressure',nst=7)
       ! Configure implicit velocity solver
-      vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-      call param_read('Implicit iteration',vs%maxit)
-      call param_read('Implicit tolerance',vs%rcvg)
+      vs=ddadi(cfg=cfg,name='Velocity',nst=7)
       ! Setup the solver
       call fs%setup(pressure_solver=ps,implicit_solver=vs)
     end block create_flow_solver
@@ -158,7 +152,7 @@ contains
       ! Get particle diameter from the input
       call param_read('Particle diameter',dp)
       ! Set filter scale to 3.5*dx
-      lp%filter_width=3.5_WP*cfg%min_meshsize
+      call param_read('Filter width',lp%filter_width,default=4.0_WP*dp)
 
       ! Root process initializes particles uniformly
       call param_read('Bed height',Hbed)

@@ -163,7 +163,7 @@ contains
                            do si=0,1
                               n=n+1
                               hex_vertex(:,n)=[this%x(i+si),this%y(j+sj),this%z(k+sk)]
-                              G(n)=-this%get_scalar(hex_vertex(:,n),i,j,k,this%Gib,'n')
+                              G(n)=this%get_scalar(hex_vertex(:,n),i,j,k,this%Gib,'n')
                            end do
                         end do
                      end do

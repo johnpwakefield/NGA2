@@ -1,0 +1,55 @@
+# Parallelization
+
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.064
+Ly :	0.032
+Lz :	0.006
+nx :	64
+ny :	32
+nz :	6
+
+# Time integration
+Max timestep size :	5e-5
+Max cfl number :	1
+Max time : 		5
+
+# Fluid properties
+Dynamic viscosity : 1.8e-5
+Thermal diffusivity :  0.00002571428
+CO2 diffusivity : 0.00002571428
+Heat capacity : 1000
+Density :   1.2
+Pressure : 101325
+Gravity :   -9.81 0 0
+Inlet velocity : 0.25
+
+# Scalars
+Initial T: 300
+Initial CO2 : 0
+Inlet T : 350
+Inlet CO2 : 0.1
+Min T : 250
+Max T : 400
+Min CO2 : -.1
+Max CO2 : 1.1
+
+# Particle parameters
+Fixed particles : .false.
+Bed height : 0.032
+Particle volume fraction : 0.4
+Particle diameter : 500e-6
+Particle density :  861.4
+Particle temperature : 300
+Particle heat capacity : 1580
+Collision timescale : .00075
+Coefficient of restitution : 0.8
+Friction coefficient : 0.1
+Filter width : .005
+
+# Adsorption
+Adsorption model : Bos
+
+# Ensight output
+Ensight output period : .005

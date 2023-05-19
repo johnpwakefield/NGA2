@@ -2,10 +2,10 @@
 module simulation
   use string,             only: str_medium
   use precision,          only: WP
-  use geometry,           only: cfg,D,get_VF
+  use geometry,           only: cfg,D
   use lowmach_class,      only: lowmach
-  use fftsolver3d_class,  only: fftsolver3d
-  use hypre_str_class,    only: hypre_str
+  use fft3d_class,        only: fft3d
+  use ddadi_class,        only: ddadi
   use lpt_class,          only: lpt
   use timetracker_class,  only: timetracker
   use ensight_class,      only: ensight
@@ -18,8 +18,8 @@ module simulation
 
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker
   type(lowmach),      public :: fs
-  type(fftsolver3d),    public :: ps
-  type(hypre_str),    public :: vs
+  type(fft3d),        public :: ps
+  type(ddadi),        public :: vs
   type(lpt),          public :: lp
   type(timetracker),  public :: time
 
@@ -33,9 +33,6 @@ module simulation
   type(partmesh) :: pmesh
   type(event)    :: ens_evt
 
-  !> Event for post-processing
-  type(event) :: ppevt
-
   !> Simulation monitor file
   type(monitor) :: mfile,cflfile,lptfile,tfile
 
@@ -46,8 +43,6 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
   real(WP), dimension(:,:,:), allocatable :: tmp1,tmp2,tmp3
-  real(WP), dimension(:,:,:), allocatable :: G
-  real(WP), dimension(:,:,:,:), allocatable :: Gnorm
   real(WP) :: visc,rho,mfr,mfr_target,bforce
 
   !> Max timestep size for LPT
@@ -64,55 +59,6 @@ module simulation
 contains
 
 
-    !> Specialized subroutine that outputs mean statistics
-   subroutine postproc()
-      use string,    only: str_medium
-      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
-      use parallel,  only: MPI_REAL_WP
-      implicit none
-!!$      integer :: iunit,ierr,i,j,k
-!!$      real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_
-!!$      character(len=str_medium) :: filename,timestamp
-!!$      ! Allocate radial line storage
-!!$      allocate(Uavg (fs%cfg%jmin:fs%cfg%jmax)); Uavg =0.0_WP
-!!$      allocate(Uavg_(fs%cfg%jmin:fs%cfg%jmax)); Uavg_=0.0_WP
-!!$      allocate(vol_ (fs%cfg%jmin:fs%cfg%jmax)); vol_ =0.0_WP
-!!$      allocate(vol  (fs%cfg%jmin:fs%cfg%jmax)); vol  =0.0_WP
-!!$      ! Integrate all data over x and z
-!!$      do k=fs%cfg%kmin_,fs%cfg%kmax_
-!!$         do j=fs%cfg%jmin_,fs%cfg%jmax_
-!!$            do i=fs%cfg%imin_,fs%cfg%imax_
-!!$               vol_(j) = vol_(j)+fs%cfg%vol(i,j,k)
-!!$               Uavg_(j)=Uavg_(j)+fs%cfg%vol(i,j,k)*fs%U(i,j,k)
-!!$            end do
-!!$         end do
-!!$      end do
-!!$      ! All-reduce the data
-!!$      call MPI_ALLREDUCE( vol_, vol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-!!$      call MPI_ALLREDUCE(Uavg_,Uavg,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-!!$      do j=fs%cfg%jmin,fs%cfg%jmax
-!!$         if (vol(j).gt.0.0_WP) then
-!!$            Uavg(j)=Uavg(j)/vol(j)
-!!$         else
-!!$            Uavg(j)=0.0_WP
-!!$         end if
-!!$      end do
-!!$      ! If root, print it out
-!!$      if (fs%cfg%amRoot) then
-!!$         filename='Uavg_'
-!!$         write(timestamp,'(es12.5)') time%t
-!!$         open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-!!$         write(iunit,'(a12,3x,a12)') 'Height','Uavg'
-!!$         do j=fs%cfg%jmin,fs%cfg%jmax
-!!$            write(iunit,'(es12.5,3x,es12.5)') fs%cfg%ym(j),Uavg(j)
-!!$         end do
-!!$         close(iunit)
-!!$      end if
-!!$      ! Deallocate work arrays
-!!$      deallocate(Uavg,Uavg_,vol,vol_)
-    end subroutine postproc
-
-
   !> Compute massflow rate
    function get_bodyforce_mfr(srcU) result(mfr)
       use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
@@ -125,7 +71,7 @@ contains
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
-                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
+                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
                   myUvol=myUvol+vol
                   myRhoU=myRhoU+vol*(fs%rhoU(i,j,k)+srcU(i,j,k))
                end do
@@ -135,7 +81,7 @@ contains
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
-                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
+                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
                   myUvol=myUvol+vol
                   myRhoU=myRhoU+vol*fs%rhoU(i,j,k)
                end do
@@ -217,7 +163,6 @@ contains
 
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use hypre_str_class, only: pcg_pfmg
       ! Create flow solver
       fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
 
@@ -228,11 +173,8 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
-      ! Configure implicit velocity solver
-      vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-      call param_read('Implicit iteration',vs%maxit)
-      call param_read('Implicit tolerance',vs%rcvg)
+      ps=fft3d(cfg=cfg,name='Pressure',nst=7)
+      vs=ddadi(cfg=cfg,name='Velocity',nst=7)
       ! Setup the solver
       call fs%setup(pressure_solver=ps,implicit_solver=vs)
     end block create_flow_solver
@@ -251,11 +193,9 @@ contains
       allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(rho0    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(G       (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(tmp1    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(tmp2    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       allocate(tmp3    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-      allocate(Gnorm   (1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
 
 
@@ -272,10 +212,9 @@ contains
       integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
       integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
       character(len=str_medium) :: timestamp
-      logical :: overlap
+      logical :: overlap,outside
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
-      ! Get pipe diameter from input
       ! Get mean volume fraction from input
       call param_read('Particle volume fraction',VFavg)
       ! Get drag model from input
@@ -305,8 +244,8 @@ contains
       call param_read('Friction coefficient',lp%mu_f,default=0.0_WP)
       ! Set gravity
       call param_read('Gravity',lp%gravity)
-      ! Set filter scale to 3.5*dx
-      lp%filter_width=3.5_WP*cfg%min_meshsize
+      ! Set filter width
+      call param_read('Filter width',lp%filter_width)
       ! Initialize particles
       if (restarted) then
          call param_read('Restart from',timestamp,'r')
@@ -318,7 +257,7 @@ contains
          do k=lp%cfg%kmin_,lp%cfg%kmax_
             do j=lp%cfg%jmin_,lp%cfg%jmax_
                do i=lp%cfg%imin_,fs%cfg%imax_
-                  Vol_=Vol_+lp%cfg%dx(i)*lp%cfg%dy(j)*lp%cfg%dz(k)
+                  Vol_=Vol_+lp%cfg%vol(i,j,k)*lp%cfg%VF(i,j,k)
                end do
             end do
          end do
@@ -346,9 +285,14 @@ contains
             ! Give position (avoid overlap)
             overlap=.true.
             do while (overlap)
-               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin_),lp%cfg%x(lp%cfg%imax_+1)-dmax),&
-                    &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dmax),&
-                    &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dmax)]
+               outside=.true.
+               do while (outside)
+                  lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin_),lp%cfg%x(lp%cfg%imax_+1)-dmax),&
+                       &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dmax),&
+                       &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dmax)]
+                  if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP
+                  if (sqrt(sum(lp%p(i)%pos(2:3))**2).lt.0.5*(D-lp%p(i)%d)) outside=.false.
+               end do
                lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                overlap=.false.
                do kk=lp%p(i)%ind(3)-1,lp%p(i)%ind(3)+1
@@ -362,29 +306,23 @@ contains
                   end do
                end do
             end do
-            ! Check if particle is within the pipe
-            r=sqrt(lp%p(i)%pos(2)**2+lp%p(i)%pos(3)**2)
-            if (r.le.0.5_WP*(D-lp%p(i)%d)) then
-               ! Activate the particle
-               lp%p(i)%flag=0
-               ip=lp%p(i)%ind(1); jp=lp%p(i)%ind(2); kp=lp%p(i)%ind(3)
-               npic(ip,jp,kp)=npic(ip,jp,kp)+1
-               ipic(npic(ip,jp,kp),ip,jp,kp)=i
-               ! Set the temperature
-               lp%p(i)%T=Tp
-               ! Give zero velocity
-               lp%p(i)%vel=0.0_WP
-               ! Give zero collision force
-               lp%p(i)%Acol=0.0_WP
-               lp%p(i)%Tcol=0.0_WP
-               ! Give zero dt
-               lp%p(i)%dt=0.0_WP
-               ! Sum up volume
-               sumVolp=sumVolp+Pi/6.0_WP*lp%p(i)%d**3
-               meand=meand+lp%p(i)%d
-            else
-               lp%p(i)%flag=1
-            end if
+            ! Activate the particle
+            lp%p(i)%flag=0
+            ip=lp%p(i)%ind(1); jp=lp%p(i)%ind(2); kp=lp%p(i)%ind(3)
+            npic(ip,jp,kp)=npic(ip,jp,kp)+1
+            ipic(npic(ip,jp,kp),ip,jp,kp)=i
+            ! Set the temperature
+            lp%p(i)%T=Tp
+            ! Give zero velocity
+            lp%p(i)%vel=0.0_WP
+            ! Give zero collision force
+            lp%p(i)%Acol=0.0_WP
+            lp%p(i)%Tcol=0.0_WP
+            ! Give zero dt
+            lp%p(i)%dt=0.0_WP
+            ! Sum up volume
+            sumVolp=sumVolp+Pi/6.0_WP*lp%p(i)%d**3
+            meand=meand+lp%p(i)%d
          end do
          deallocate(dp,npic,ipic)
          call lp%sync()
@@ -461,28 +399,6 @@ contains
       mfr_target=mfr
     end block initialize_velocity
 
-
-    ! Initialize levelset and its normal
-    initialize_G: block
-      integer :: i,j,k
-      real(WP) :: buf
-      real(WP), dimension(3) :: n12
-      do k=fs%cfg%kmin_,fs%cfg%kmax_
-         do j=fs%cfg%jmin_,fs%cfg%jmax_
-            do i=fs%cfg%imin_,fs%cfg%imax_
-               G(i,j,k)=0.5_WP*D-sqrt(fs%cfg%ym(j)**2+fs%cfg%zm(k)**2)
-               n12(1)=0.0_WP
-               n12(2)=-fs%cfg%ym(j)
-               n12(3)=-fs%cfg%zm(k)
-               buf = sqrt(sum(n12*n12))+epsilon(1.0_WP)
-               Gnorm(:,i,j,k)=n12/buf
-            end do
-         end do
-      end do
-      call fs%cfg%sync(G)
-      call fs%cfg%sync(Gnorm)
-    end block initialize_G
-
     ! Add Ensight output
     create_ensight: block
       ! Create Ensight output from cfg
@@ -493,7 +409,7 @@ contains
       ! Add variables to output
       call ens_out%add_particle('particles',pmesh)
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
-      call ens_out%add_scalar('levelset',G)
+      call ens_out%add_scalar('levelset',cfg%Gib)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_scalar('epsp',lp%VF)
       call ens_out%add_scalar('ptke',lp%ptke)
@@ -544,6 +460,7 @@ contains
       call lptfile%add_column(lp_dt,'Particle dt')
       call lptfile%add_column(lp%VFmean,'VFp mean')
       call lptfile%add_column(lp%VFmax,'VFp max')
+      call lptfile%add_column(lp%VFvar,'VFp var')
       call lptfile%add_column(lp%np,'Particle number')
       call lptfile%add_column(lp%ncol,'Collision number')
       call lptfile%add_column(lp%Umin,'Particle Umin')
@@ -570,16 +487,6 @@ contains
       call tfile%add_column(wt_rest%percent,'Rest [%]')
       call tfile%write()
     end block create_monitor
-
-
-    ! Create a specialized post-processing file
-    create_postproc: block
-      ! Create event for data postprocessing
-      ppevt=event(time=time,name='Postproc output')
-      call param_read('Postproc output period',ppevt%tper)
-      ! Perform the output
-      if (ppevt%occurs()) call postproc()
-    end block create_postproc
 
   end subroutine simulation_init
 
@@ -625,7 +532,7 @@ contains
             ! Decide the timestep size
             mydt=min(lp_dt,time%dtmid-dt_done)
             ! Collide and advance particles
-            call lp%collide(dt=mydt,Gib=G,Nxib=Gnorm(1,:,:,:),Nyib=Gnorm(2,:,:,:),Nzib=Gnorm(3,:,:,:))
+            call lp%collide(dt=mydt,Gib=cfg%Gib,Nxib=cfg%Nib(1,:,:,:),Nyib=cfg%Nib(2,:,:,:),Nzib=cfg%Nib(3,:,:,:))
             call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
                  srcU=tmp1,srcV=tmp2,srcW=tmp3)
             srcUlp=srcUlp+tmp1
@@ -638,7 +545,7 @@ contains
          fs%rho=rho*(1.0_WP-lp%VF)
          dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
          ! Compute PTKE and store source terms
-         call lp%get_ptke(dt=time%dtmid,Ui=Ui,Vi=Vi,Wi=Wi,visc=fs%visc,rho=fs%rho,srcU=tmp1,srcV=tmp2,srcW=tmp3)
+         call lp%get_ptke(dt=time%dtmid,Ui=Ui,Vi=Vi,Wi=Wi,visc=fs%visc,rho=rho0,srcU=tmp1,srcV=tmp2,srcW=tmp3)
          srcUlp=srcUlp+tmp1
          srcVlp=srcVlp+tmp2
          srcWlp=srcWlp+tmp3
@@ -683,17 +590,19 @@ contains
             call fs%cfg%sync(resW)
           end block add_lpt_src
 
-          ! Apply direct forcing to enforce BC at the pipe walls
+          ! Apply IB forcing to enforce BC at the pipe walls
           ibm_correction: block
             integer :: i,j,k
             real(WP) :: VFx,VFy,VFz
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
-                     VFx=get_VF(i,j,k,'U'); VFy=get_VF(i,j,k,'V'); VFz=get_VF(i,j,k,'W')
-                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*sum(fs%itpr_x(:,i,j,k)*fs%rho(i-1:i,j,k))*fs%U(i,j,k)
-                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*sum(fs%itpr_y(:,i,j,k)*fs%rho(i,j-1:j,k))*fs%V(i,j,k)
-                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*sum(fs%itpr_z(:,i,j,k)*fs%rho(i,j,k-1:k))*fs%W(i,j,k)
+                     VFx=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
+                     VFy=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))
+                     VFz=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))
+                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*fs%rhoU(i,j,k)
+                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*fs%rhoV(i,j,k)
+                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*fs%rhoW(i,j,k)
                   end do
                end do
             end do
@@ -720,9 +629,9 @@ contains
 !!$            do k=fs%cfg%kmin_,fs%cfg%kmax_
 !!$               do j=fs%cfg%jmin_,fs%cfg%jmax_
 !!$                  do i=fs%cfg%imin_,fs%cfg%imax_
-!!$                     fs%U(i,j,k)=get_VF(i,j,k,'U')*fs%U(i,j,k)
-!!$                     fs%V(i,j,k)=get_VF(i,j,k,'V')*fs%V(i,j,k)
-!!$                     fs%W(i,j,k)=get_VF(i,j,k,'W')*fs%W(i,j,k)
+!!$                     fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
+!!$                     fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
+!!$                     fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
 !!$                  end do
 !!$               end do
 !!$            end do
@@ -783,9 +692,6 @@ contains
           call ens_out%write_data(time%t)
        end if
 
-       ! Specialized post-processing
-       if (ppevt%occurs()) call postproc()
-
        ! Perform and output monitoring
        call fs%get_max()
        call lp%get_max()
@@ -843,7 +749,7 @@ contains
     ! timetracker
 
     ! Deallocate work arrays
-    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt,G,Gnorm,tmp1,tmp2,tmp3)
+    deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,dRHOdt,tmp1,tmp2,tmp3)
 
   end subroutine simulation_final
 

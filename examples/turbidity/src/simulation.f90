@@ -3,7 +3,7 @@ module simulation
   use precision,         only: WP
   use geometry,          only: cfg
   use lpt_class,         only: lpt
-  use hypre_uns_class,   only: hypre_uns
+  use ddadi_class,       only: ddadi
   use hypre_str_class,   only: hypre_str
   use lowmach_class,     only: lowmach
   use sgsmodel_class,    only: sgsmodel
@@ -16,8 +16,8 @@ module simulation
   private
   
   !> Get an LPT solver, a lowmach solver, and corresponding time tracker, plus a couple of linear solvers
-  type(hypre_uns),   public :: ps
-  type(hypre_str),   public :: vs
+  type(hypre_str),   public :: ps
+  type(ddadi),       public :: vs
   type(lowmach),     public :: fs
   type(lpt),         public :: lp
   type(sgsmodel),    public :: sgs
@@ -129,7 +129,6 @@ contains
 
     ! Create a low Mach flow solver with bconds
     create_flow_solver: block
-      use hypre_uns_class, only: gmres_amg  
       use hypre_str_class, only: pcg_pfmg
       use lowmach_class,   only: dirichlet,clipped_neumann,slip
       ! Create flow solver
@@ -146,13 +145,11 @@ contains
       ! Assign acceleration of gravity
       call param_read('Gravity',fs%gravity)
       ! Configure pressure solver
-      ps=hypre_uns(cfg=cfg,name='Pressure',method=gmres_amg,nst=7)
+      ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
       call param_read('Pressure iteration',ps%maxit)
       call param_read('Pressure tolerance',ps%rcvg)
       ! Configure implicit velocity solver
-      vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-      call param_read('Implicit iteration',vs%maxit)
-      call param_read('Implicit tolerance',vs%rcvg)
+      vs=ddadi(cfg=cfg,name='Velocity',nst=7)
       ! Setup the solver
       call fs%setup(pressure_solver=ps,implicit_solver=vs)
     end block create_flow_solver
@@ -333,6 +330,7 @@ contains
       call ens_out%add_particle('particles',pmesh)
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('epsp',lp%VF)
+      call ens_out%add_scalar('PTKE',lp%ptke)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_scalar('visc_sgs',sgs%visc)
       ! Output to ensight
@@ -457,13 +455,18 @@ contains
             ! Collide and advance particles
             call lp%collide(dt=mydt)
             call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
-                 vortx=SR(1,:,:,:),vorty=SR(2,:,:,:),vortz=SR(3,:,:,:),srcU=tmp1,srcV=tmp2,srcW=tmp3)
+                 srcU=tmp1,srcV=tmp2,srcW=tmp3)
             srcUlp=srcUlp+tmp1
             srcVlp=srcVlp+tmp2
             srcWlp=srcWlp+tmp3
             ! Increment
             dt_done=dt_done+mydt
          end do
+         ! Compute PTKE and store source terms
+         call lp%get_ptke(dt=time%dtmid,Ui=Ui,Vi=Vi,Wi=Wi,visc=fs%visc,rho=rho0,srcU=tmp1,srcV=tmp2,srcW=tmp3)
+         srcUlp=srcUlp+tmp1
+         srcVlp=srcVlp+tmp2
+         srcWlp=srcWlp+tmp3
          ! Update density based on particle volume fraction
          fs%rho=rho*(1.0_WP-lp%VF)
          dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
@@ -472,12 +475,12 @@ contains
 
        ! Turbulence modeling
        wt_sgs%time_in=parallel_time()
-!!$       sgs_modeling: block
-!!$         use sgsmodel_class, only: dynamic_smag
-!!$         call fs%get_strainrate(SR)
-!!$         call sgs%get_visc(type=dynamic_smag,dt=time%dtold,rho=rho0,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
-!!$         fs%visc=visc+sgs%visc
-!!$       end block sgs_modeling
+       sgs_modeling: block
+         use sgsmodel_class, only: dynamic_smag
+         call fs%get_strainrate(SR)
+         call sgs%get_visc(type=dynamic_smag,dt=time%dtold,rho=rho0,Ui=Ui,Vi=Vi,Wi=Wi,SR=SR)
+         fs%visc=visc+sgs%visc
+       end block sgs_modeling
        wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
 
        ! Perform sub-iterations

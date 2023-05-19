@@ -1,0 +1,1 @@
+This case feeds in homogeneous isotropic turbulence into a crossflow using 2 grids. Includes support for Lagrangian particle tracking settling under gravity.

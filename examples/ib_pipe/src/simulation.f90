@@ -2,28 +2,27 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg,D,get_VF
-   use hypre_str_class,   only: hypre_str
-   use fftsolver3d_class, only: fftsolver3d
+   use fft3d_class,       only: fft3d
+   use ddadi_class,       only: ddadi
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
 
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
-   !type(hypre_str),   public :: ps
-   type(fftsolver3d),   public :: ps
-   type(hypre_str),   public :: vs
+   type(fft3d),       public :: ps
+   type(ddadi),       public :: vs
    type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
 
    !> Ensight postprocessing
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(ensight)        :: ens_out
+   type(periodic_event) :: ens_evt
 
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -96,22 +95,15 @@ contains
 
       ! Create an incompressible flow solver without bconds
       create_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='Incompressible NS')
          ! Set the flow properties
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
-         ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
-         !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         !ps%maxlevel=14
-         !call param_read('Pressure iteration',ps%maxit)
-         !call param_read('Pressure tolerance',ps%rcvg)
+         ps=fft3d(cfg=cfg,name='Pressure',nst=7)
          ! Configure implicit velocity solver
-         vs=hypre_str(cfg=cfg,name='Velocity',method=pcg_pfmg,nst=7)
-         call param_read('Implicit iteration',vs%maxit)
-         call param_read('Implicit tolerance',vs%rcvg)
+         vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps,implicit_solver=vs)
       end block create_flow_solver
@@ -188,7 +180,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='pipe')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)

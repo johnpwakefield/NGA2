@@ -6,7 +6,7 @@ module simulation
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private

@@ -6,7 +6,7 @@ module simulation
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
@@ -18,7 +18,7 @@ module simulation
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -33,7 +33,7 @@ module simulation
    real(WP), dimension(3) :: Cdrop
    real(WP) :: Rdrop,Vimb
    type(monitor) :: ppfile
-   type(event) :: ppevt
+   type(periodic_event) :: ppevt
    
 contains
    
@@ -363,7 +363,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='twophase')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)
@@ -427,7 +427,7 @@ contains
          call ppfile%add_column(Vimb,'Imbibed volume')
          call ppfile%write()
          ! Create event for data postprocessing
-         ppevt=event(time=time,name='Postproc output')
+         ppevt=periodic_event(time=time,name='Postproc output')
          call param_read('Postproc output period',ppevt%tper)
          ! Perform the output
          if (ppevt%occurs()) call postproc_data()

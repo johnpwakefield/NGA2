@@ -1,0 +1,53 @@
+######## SHARED PARAMETERS ########
+
+# Parallelization
+Partition : 1 4 1
+
+# Flow conditions
+Dynamic viscosity :    .01
+Density :              1
+
+# Time integration
+Max timestep size : 5e-3
+Max cfl number :    0.9
+Max time :          200
+
+# Ensight output
+Ensight output period : 0.1
+
+
+######### SOLVER 1 INPUT ##########
+# This is the HIT flow
+
+# Mesh definition
+1 Lx :  6.2832
+1 Ly :  6.2832
+1 Lz :  6.2832!0.098175
+1 nx :  64
+1 ny :  64
+1 nz :  64!1
+
+# Flow conditions
+Target Re_lambda :     45
+Turbulence intensity : 0.02
+
+
+######### SOLVER 2 INPUT ##########
+This is the crossflow
+
+# Mesh definition
+2 Lx :  18.8496
+2 Ly :  6.2832
+2 Lz :  6.2832!0.098175
+2 nx :  192
+2 ny :  64
+2 nz :  64!1
+
+# Flow conditions
+Bulk velocity : 7
+
+# Particle properties
+Particle density : 1000
+Particle mean diameter : 0.005
+Particle mass flow rate: 0.1
+Gravity : 0 -1 0

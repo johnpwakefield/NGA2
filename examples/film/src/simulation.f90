@@ -8,7 +8,7 @@ module simulation
    use timetracker_class, only: timetracker
    use surfmesh_class,    only: surfmesh
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
@@ -22,9 +22,9 @@ module simulation
    type(ccl),         public :: cc
    
    !> Ensight postprocessing
-   type(surfmesh) :: smesh
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(surfmesh)       :: smesh
+   type(ensight)        :: ens_out
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -44,7 +44,7 @@ module simulation
    integer :: ndrop
    real(WP), dimension(:), allocatable :: drop_diam
    real(WP) :: mean_diam,min_diam,max_diam
-   type(event) :: drop_evt
+   type(periodic_event) :: drop_evt
    type(monitor) :: dropfile
 
 contains
@@ -253,7 +253,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='Film')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
@@ -273,7 +273,7 @@ contains
          cc%max_interface_planes=1
          cc%VFlo=VFlo
          ! Create event for drop size output
-         drop_evt=event(time=time,name='Drop output')
+         drop_evt=periodic_event(time=time,name='Drop output')
          call param_read('Drop output period',drop_evt%tper)
          ! Prepare directory for drop size output
          if (vf%cfg%amRoot) call execute_command_line('mkdir -p drops')

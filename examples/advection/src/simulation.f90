@@ -8,7 +8,7 @@ module simulation
   use timetracker_class,    only: timetracker
   use ensight_class,        only: ensight
   use partmesh_class,       only: partmesh
-  use event_class,          only: event
+  use event_class,          only: periodic_event
   use monitor_class,        only: monitor
   implicit none
   private
@@ -18,8 +18,8 @@ module simulation
   type(timetracker), public :: time
 
   !> Ensight postprocessing
-  type(ensight)  :: ens_out
-  type(event)    :: ens_evt
+  type(ensight) :: ens_out
+  type(periodic_event) :: ens_evt
 
   !> simulation monitor file
   type(monitor) :: mfile, cflfile
@@ -197,7 +197,7 @@ contains
       ens_out=ensight(cfg=cfg, name='AdvectionTest')
 
       ! Create event for Ensight output
-      ens_evt=event(time=time, name='Ensight output')
+      ens_evt=periodic_event(time=time, name='Ensight output')
       call param_read('Ensight output period', ens_evt%tper)
 
       ! Add variables to output

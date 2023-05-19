@@ -7,7 +7,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
@@ -16,11 +16,11 @@ module simulation
    type(tpns),        public :: fs
    type(vfs),         public :: vf
    type(timetracker), public :: time
-   type(surfmesh),    public :: smesh                                              
+   type(surfmesh),    public :: smesh
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -273,7 +273,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='swirl_atomizer')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)

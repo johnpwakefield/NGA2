@@ -8,7 +8,7 @@ module simulation
    use vdscalar_class,    only: vdscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
@@ -22,10 +22,10 @@ module simulation
    
    !> Ensight postprocessing
    type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(periodic_event) :: ens_evt
    
    !> Provide datafile and an event tracker for saving restarts
-   type(event)    :: save_evt
+   type(periodic_event) :: save_evt
    type(datafile) :: df
    logical :: restarted
    
@@ -523,7 +523,7 @@ contains
       restart_and_save: block
          character(len=str_medium) :: dir_restart
          ! Create event for saving restart files
-         save_evt=event(time,'Restart output')
+         save_evt=periodic_event(time,'Restart output')
          call param_read('Restart output period',save_evt%tper)
          ! Check if we are restarting
          call param_read(tag='Restart from',val=dir_restart,short='r',default='')
@@ -876,7 +876,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='pvessel')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)

@@ -15,7 +15,7 @@ module simulation
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
    use partmesh_class,    only: partmesh
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
@@ -46,21 +46,21 @@ module simulation
    type(sgsmodel),    public :: sgs3
    
    !> Provide three datafiles and an event tracker for saving restarts
-   type(event)    :: save_evt
+   type(periodic_event) :: save_evt
    type(datafile) :: df1,df2,df3
    character(len=str_medium) :: irl_file
    character(len=str_medium) :: lpt_file
    logical :: restarted
    
    !> Ensight postprocessing
-   type(surfmesh) :: smesh2
-   type(partmesh) :: pmesh3
-   type(ensight)  :: ens_out1
-   type(ensight)  :: ens_out2
-   type(ensight)  :: ens_out3
-   type(event)    :: ens_evt1
-   type(event)    :: ens_evt2
-   type(event)    :: ens_evt3
+   type(surfmesh)       :: smesh2
+   type(partmesh)       :: pmesh3
+   type(ensight)        :: ens_out1
+   type(ensight)        :: ens_out2
+   type(ensight)        :: ens_out3
+   type(periodic_event) :: ens_evt1
+   type(periodic_event) :: ens_evt2
+   type(periodic_event) :: ens_evt3
    
    !> Simulation monitor file
    type(monitor) :: mfile1,cflfile1
@@ -260,7 +260,7 @@ contains
          ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
          time2=timetracker(cfg2%amRoot,name='nozzle_exterior')
          ! Create event for saving restart files
-         save_evt=event(time2,'Restart output')
+         save_evt=periodic_event(time2,'Restart output')
          call param_read('Restart output period',save_evt%tper)
          ! Check if we are restarting
          call param_read(tag='Restart from',val=dir_restart,short='r',default='')
@@ -558,7 +558,7 @@ contains
          ! Create Ensight output from cfg2
          ens_out2=ensight(cfg2,'atom')
          ! Create event for Ensight output
-         ens_evt2=event(time2,'Ensight output')
+         ens_evt2=periodic_event(time2,'Ensight output')
          call param_read('2 Ensight output period',ens_evt2%tper)
          ! Add variables to output
          call ens_out2%add_vector('velocity',Ui2,Vi2,Wi2)
@@ -746,7 +746,7 @@ contains
          ! Create Ensight output from cfg
          ens_out1=ensight(cfg1,'nozzle')
          ! Create event for Ensight output
-         ens_evt1=event(time1,'Ensight output')
+         ens_evt1=periodic_event(time1,'Ensight output')
          call param_read('1 Ensight output period',ens_evt1%tper)
          ! Add variables to output
          call ens_out1%add_vector('velocity',Ui1,Vi1,Wi1)
@@ -937,7 +937,7 @@ contains
          ! Create Ensight output from cfg
          ens_out3=ensight(cfg3,'spray')
          ! Create event for Ensight output
-         ens_evt3=event(time3,'Ensight output')
+         ens_evt3=periodic_event(time3,'Ensight output')
          call param_read('3 Ensight output period',ens_evt3%tper)
          ! Add variables to output
          call ens_out3%add_vector('velocity',Ui3,Vi3,Wi3)

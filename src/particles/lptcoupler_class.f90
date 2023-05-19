@@ -11,7 +11,7 @@ module lptcoupler_class
 
   ! Expose type/constructor/methods
   public :: lptcoupler
-  
+
   ! buffer sizing behavior
   real(WP), parameter :: MEM_ADJ_UP = 1.3_WP          !< Particle array size increase factor
   !TODO add buffer shrinking
@@ -421,7 +421,7 @@ contains
     ! compute recieve displacements
     recvdisps(:) = (/ (sum(this%recvcounts(1:i)), i = 0, this%unp - 1) /)
 
-    ! send particles    
+    ! send particles
     call mpi_alltoallv(this%sendbuf, this%sendcounts, senddisps, MPI_PART,    &
                        this%recvbuf, this%recvcounts, recvdisps, MPI_PART,    &
                        this%comm, ierr)

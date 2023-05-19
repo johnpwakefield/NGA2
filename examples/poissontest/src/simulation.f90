@@ -2,12 +2,12 @@
 module simulation
   use precision,          only: WP
   use geometry,           only: cfg
-  use fftsolver3d_class,  only: fftsolver3d
+  use fft3d_class,  only: fft3d
   use ensight_class,      only: ensight
   implicit none
   private
 
-  type(fftsolver3d), public :: ps
+  type(fft3d), public :: ps
 
   !> Ensight postprocessing
   type(ensight)  :: ens_out
@@ -52,7 +52,7 @@ contains
       integer :: i, j, k
 
       ! create solver
-      ps = fftsolver3d(cfg=cfg, nst=7, name='FFT Poisson Test')
+      ps = fft3d(cfg=cfg, nst=7, name='FFT Poisson Test')
       call ps%init()
 
       ! set stencil

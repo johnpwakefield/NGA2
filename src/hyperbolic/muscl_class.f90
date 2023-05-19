@@ -207,14 +207,14 @@ contains
 
   !> Add a boundary condition
   subroutine add_bcond(this, name, type, locator, dir)
-    use iterator_class, only: locator_gen_ftype
+    use iterator_class, only: locator_ftype
     use string,         only: lowercase
     use messager,       only: die
     implicit none
     class(muscl), intent(inout) :: this
     character(len=*), intent(in) :: name
     integer(1), intent(in) :: type
-    procedure(locator_gen_ftype) :: locator
+    procedure(locator_ftype) :: locator
     character(len=2), intent(in) :: dir
     type(muscl_bc), pointer :: new_bc
     integer :: i, j, k, n

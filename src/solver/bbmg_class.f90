@@ -1394,7 +1394,7 @@ contains
       ! Shortcut to sizes
       no=this%no
       n1=this%lvl(n)%nxo_; n2=this%lvl(n)%nyo_; n3=this%lvl(n)%nzo_
-      ! Communicate in X =======================================================
+      ! Communicate in X
       ! Initialize buffer and size
       allocate(buf1(no,n2,n3),buf2(no,n2,n3)); icount=no*n2*n3
       ! Allocate request
@@ -1445,7 +1445,7 @@ contains
       if (this%lvl(n)%recv_xp.ne.MPI_PROC_NULL) A(1:no,:,:)=buf2(:,:,:)
       ! Deallocate
       deallocate(buf1,buf2,request)
-      ! Communicate in Y =======================================================
+      ! Communicate in Y
       ! Initialize buffer and size
       allocate(buf1(n1,no,n3),buf2(n1,no,n3)); icount=n1*no*n3
       ! Allocate request
@@ -1496,7 +1496,7 @@ contains
       if (this%lvl(n)%recv_yp.ne.MPI_PROC_NULL) A(:,1:no,:)=buf2(:,:,:)
       ! Deallocate
       deallocate(buf1,buf2,request)
-      ! Communicate in Z =======================================================
+      ! Communicate in Z
       ! Initialize buffer and size
       allocate(buf1(n1,n2,no),buf2(n1,n2,no)); icount=n1*n2*no
       ! Allocate request
@@ -1564,7 +1564,7 @@ contains
       ! Shortcut to sizes
       no=this%no; nstx=size(A,DIM=1); nsty=size(A,DIM=2); nstz=size(A,DIM=3)
       n1=this%lvl(n)%nxo_; n2=this%lvl(n)%nyo_; n3=this%lvl(n)%nzo_
-      ! Communicate in X =======================================================
+      ! Communicate in X
       ! Initialize buffer and size
       allocate(buf1(nstx,nsty,nstz,no,n2,n3),buf2(nstx,nsty,nstz,no,n2,n3)); icount=nstx*nsty*nstz*no*n2*n3
       ! Allocate request
@@ -1615,7 +1615,7 @@ contains
       if (this%lvl(n)%recv_xp.ne.MPI_PROC_NULL) A(:,:,:,1:no,:,:)=buf2(:,:,:,:,:,:)
       ! Deallocate
       deallocate(buf1,buf2,request)
-      ! Communicate in Y =======================================================
+      ! Communicate in Y
       ! Initialize buffer and size
       allocate(buf1(nstx,nsty,nstz,n1,no,n3),buf2(nstx,nsty,nstz,n1,no,n3)); icount=nstx*nsty*nstz*n1*no*n3
       ! Allocate request
@@ -1666,7 +1666,7 @@ contains
       if (this%lvl(n)%recv_yp.ne.MPI_PROC_NULL) A(:,:,:,:,1:no,:)=buf2(:,:,:,:,:,:)
       ! Deallocate
       deallocate(buf1,buf2,request)
-      ! Communicate in Z =======================================================
+      ! Communicate in Z
       ! Initialize buffer and size
       allocate(buf1(nstx,nsty,nstz,n1,n2,no),buf2(nstx,nsty,nstz,n1,n2,no)); icount=nstx*nsty*nstz*n1*n2*no
       ! Allocate request

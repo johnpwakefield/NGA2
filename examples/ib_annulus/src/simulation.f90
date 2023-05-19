@@ -3,27 +3,26 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg,Dout
    use hypre_str_class,   only: hypre_str
-   use fftsolver3d_class, only: fftsolver3d
+   use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
 
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
-   !type(hypre_str),   public :: ps
-   type(fftsolver3d),   public :: ps
+   type(fft3d),       public :: ps
    type(hypre_str),   public :: vs
    type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
 
    !> Ensight postprocessing
    type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(periodic_event) :: ens_evt
 
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -94,8 +93,7 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
-         ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
-         !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps=fft3d(cfg=cfg,name='Pressure',nst=7)
          !ps%maxlevel=14
          !call param_read('Pressure iteration',ps%maxit)
          !call param_read('Pressure tolerance',ps%rcvg)
@@ -189,7 +187,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='pipe')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)

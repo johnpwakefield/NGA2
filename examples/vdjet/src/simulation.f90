@@ -2,27 +2,28 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
+   use ddadi_class,       only: ddadi
    use hypre_uns_class,   only: hypre_uns
    use lowmach_class,     only: lowmach
    use vdscalar_class,    only: vdscalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
    
    !> Single low Mach flow solver and scalar solver and corresponding time tracker
    type(hypre_uns),   public :: ps
-   type(hypre_uns),   public :: vs
-   type(hypre_uns),   public :: ss
+   type(ddadi),       public :: vs
+   type(ddadi),       public :: ss
    type(lowmach),     public :: fs
    type(vdscalar),    public :: sc
    type(timetracker), public :: time
    
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(ensight)        :: ens_out
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,consfile
@@ -158,9 +159,7 @@ contains
         call param_read('Pressure iteration',ps%maxit)
         call param_read('Pressure tolerance',ps%rcvg)
         ! Configure implicit velocity solver
-        vs=hypre_uns(cfg=cfg,name='Velocity',method=pcg_amg,nst=7)
-        call param_read('Implicit iteration',vs%maxit)
-        call param_read('Implicit tolerance',vs%rcvg)
+        vs=ddadi(cfg=cfg,name='Velocity',nst=7)
         ! Setup the solver
         call fs%setup(pressure_solver=ps,implicit_solver=vs)
       end block create_solver
@@ -168,7 +167,6 @@ contains
 
       ! Create a scalar solver
       create_scalar: block
-        use hypre_uns_class, only: pcg_amg
         use vdscalar_class, only: dirichlet,neumann,quick
         real(WP) :: diffusivity
         ! Create scalar solver
@@ -182,8 +180,7 @@ contains
         call param_read('Dynamic diffusivity',diffusivity)
         sc%diff=diffusivity
         ! Configure implicit scalar solver
-        ss=hypre_uns(cfg=cfg,name='Scalar',method=pcg_amg,nst=13)
-        ss%maxit=vs%maxit; ss%rcvg=vs%rcvg
+        ss=ddadi(cfg=cfg,name='Scalar',nst=13)
         ! Setup the solver
         call sc%setup(implicit_solver=ss)
       end block create_scalar
@@ -273,7 +270,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='vdjet')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_scalar('pressure',fs%P)

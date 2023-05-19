@@ -8,7 +8,7 @@ module simulation
   use timetracker_class,    only: timetracker
   use ensight_class,        only: ensight
   use partmesh_class,       only: partmesh
-  use event_class,          only: event
+  use event_class,          only: periodic_event
   use monitor_class,        only: monitor
   use string, only: str_medium
   implicit none
@@ -20,8 +20,8 @@ module simulation
 
   !> Ensight postprocessing
   character(len=str_medium) :: ens_out_name
-  type(ensight)  :: ens_out
-  type(event)    :: ens_evt
+  type(ensight)             :: ens_out
+  type(periodic_event)      :: ens_evt
 
   !> physical value arrays for ensight output
   real(WP), dimension(:,:,:,:), pointer :: phys_out
@@ -214,7 +214,7 @@ contains
       ens_out = ensight(cfg=cfg, name=ens_out_name)
 
       ! Create event for Ensight output
-      ens_evt = event(time=time, name='Ensight output')
+      ens_evt = periodic_event(time=time, name='Ensight output')
       call param_read('Ensight output period', ens_evt%tper)
 
       ! Add variables to output

@@ -2,7 +2,7 @@
 module simulation
   use precision,            only: WP
   use geometry,             only: cfg
-  use fftsolver3d_class,    only: fftsolver3d
+  use fft3d_class,          only: fft3d
   use incomp_class,         only: incomp
   use timetracker_class,    only: timetracker
   use ensight_class,        only: ensight
@@ -19,7 +19,7 @@ module simulation
   real(WP), parameter :: FILTER_MESH_RATIO = 3.5_WP
 
   !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-  type(fftsolver3d), public :: ps
+  type(fft3d),       public :: ps
   type(incomp),      public :: fs
   type(timetracker), public :: time
 
@@ -265,7 +265,7 @@ contains
       ! Assign constant viscosity
       fs%visc(:,:,:) = ec_params(1) * ec_params(5)
       ! Prepare and configure pressure solver
-      ps=fftsolver3d(cfg=cfg,name='Pressure',nst=7)
+      ps=fft3d(cfg=cfg,name='Pressure',nst=7)
       ! Setup the solver
       call fs%setup(pressure_solver=ps)
       fs%rho = ec_params(1)

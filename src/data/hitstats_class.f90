@@ -7,7 +7,7 @@
 module hitstats
   use precision,        only: WP
   use mpi_f08,          only: MPI_GROUP
-  use fft3d_class,      only: fft3d
+  use cfourier_class,   only: cfourier
   use monitor_class,    only: monitor
   use string,           only: str_medium, str_long
   use sgrid_class,      only: sgrid
@@ -90,7 +90,7 @@ module hitstats
     type(lpt), pointer :: ps
     type(sgrid) :: fft_sg
     type(pgrid) :: fft_pg
-    type(fft3d) :: fft
+    type(cfourier) :: fft
     integer :: num_filters
     type(microstats) :: mstats
     type(filter), dimension(:), pointer :: filters
@@ -219,7 +219,7 @@ contains
       slp_loc = slp_loc + slp
       call ps%get_rhs(U=U, V=V, W=W, rho=rhof, visc=visc, stress_x=sx,        &
         stress_y=sy, stress_z=sz, p=ps%p(n), acc=drg,                         &
-        torque=junk(1:3), opt_dt=junk(4))
+        opt_dt=junk(4))
       drg_loc = drg_loc + drg
       taup_loc = taup_loc + sum(slp * drg) / sum(drg**2)
       if (present(indfield)) indfield(ind(1),ind(2),ind(3)) =                 &
@@ -260,7 +260,7 @@ contains
     use messager, only: die
     implicit none
     class(filter), intent(inout) :: this
-    class(fft3d), intent(inout) :: fft
+    class(cfourier), intent(inout) :: fft
     real(WP) :: flt_int_l, flt_int_g
 
     ! allocate Fourier space filter
@@ -306,7 +306,9 @@ contains
     this%flt_f = this%flt_f / flt_int_g
 
     ! transform filter
-    call fft%forward_transform(this%flt_f)
+    call fft%xtransform_forward(this%flt_f)
+    call fft%ytransform_forward(this%flt_f)
+    call fft%ztransform_forward(this%flt_f)
     if (fft%oddball) this%flt_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_) =     &
       (1.0_WP, 0.0_WP)
 
@@ -372,7 +374,7 @@ contains
 
   subroutine filter_ffts_forward(fft, phi, up, uf, phi_in_f, up_in_f, uf_in_f)
     implicit none
-    type(fft3d), intent(inout) :: fft
+    type(cfourier), intent(inout) :: fft
     real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(in) :: phi
     real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:), intent(in) :: up, uf
     complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(out) :: phi_in_f
@@ -380,13 +382,19 @@ contains
     integer :: n
 
     phi_in_f(:,:,:) = phi(:,:,:)
-    call fft%forward_transform(phi_in_f)
+    call fft%xtransform_forward(phi_in_f)
+    call fft%ytransform_forward(phi_in_f)
+    call fft%ztransform_forward(phi_in_f)
 
     do n = 1, 3
       up_in_f(:,:,:,n) = up(:,:,:,n)
-      call fft%forward_transform(up_in_f(:,:,:,n))
+      call fft%xtransform_forward(up_in_f(:,:,:,n))
+      call fft%ytransform_forward(up_in_f(:,:,:,n))
+      call fft%ztransform_forward(up_in_f(:,:,:,n))
       uf_in_f(:,:,:,n) = uf(:,:,:,n)
-      call fft%forward_transform(uf_in_f(:,:,:,n))
+      call fft%xtransform_forward(uf_in_f(:,:,:,n))
+      call fft%ytransform_forward(uf_in_f(:,:,:,n))
+      call fft%ztransform_forward(uf_in_f(:,:,:,n))
     end do
 
   end subroutine filter_ffts_forward
@@ -399,7 +407,7 @@ contains
     use parallel, only: MPI_REAL_WP
     implicit none
     type(filterstats), intent(inout) :: stats
-    type(fft3d), intent(inout) :: fft
+    type(cfourier), intent(inout) :: fft
     type(filter), intent(in) :: flt
     integer, intent(in) :: step
     complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(in) :: phi_in_f
@@ -419,14 +427,20 @@ contains
 
     ! convolve and compute backward transform
     work_c(:,:,:) = phi_in_f(:,:,:) * flt%flt_f(:,:,:)
-    call fft%backward_transform(work_c)
+    call fft%xtransform_backward(work_c)
+    call fft%ytransform_backward(work_c)
+    call fft%ztransform_backward(work_c)
     phi = realpart(work_c)
     do n = 1, 3
       work_c(:,:,:) = up_in_f(:,:,:,n) * flt%flt_f(:,:,:)
-      call fft%backward_transform(work_c)
+      call fft%ztransform_backward(work_c)
+      call fft%ytransform_backward(work_c)
+      call fft%xtransform_backward(work_c)
       up(:,:,:,n) = realpart(work_c)
       work_c(:,:,:) = uf_in_f(:,:,:,n) * flt%flt_f(:,:,:)
-      call fft%backward_transform(work_c)
+      call fft%ztransform_backward(work_c)
+      call fft%ytransform_backward(work_c)
+      call fft%xtransform_backward(work_c)
       uf(:,:,:,n) = realpart(work_c)
     end do
 
@@ -493,7 +507,9 @@ contains
         work_c(:,j,k) = im * fft%kx(:) * phicheck(:,j,k)
       end do
     end do
-    call fft%backward_transform(work_c)
+    call fft%ztransform_backward(work_c)
+    call fft%ytransform_backward(work_c)
+    call fft%xtransform_backward(work_c)
     PC2SRC_loc(1) = sum(phi * up(:,:,:,1) * realpart(work_c))
     ! y direction
     do k = fft%pg%kmin_, fft%pg%kmax_
@@ -501,7 +517,9 @@ contains
         work_c(i,:,k) = im * fft%ky(:) * phicheck(i,:,k)
       end do
     end do
-    call fft%backward_transform(work_c)
+    call fft%ztransform_backward(work_c)
+    call fft%ytransform_backward(work_c)
+    call fft%xtransform_backward(work_c)
     PC2SRC_loc(2) = sum(phi * up(:,:,:,2) * realpart(work_c))
     ! z direction
     do j = fft%pg%jmin_, fft%pg%jmax_
@@ -509,7 +527,9 @@ contains
         work_c(i,j,:) = im * fft%kz(:) * phicheck(i,j,:)
       end do
     end do
-    call fft%backward_transform(work_c)
+    call fft%ztransform_backward(work_c)
+    call fft%ytransform_backward(work_c)
+    call fft%xtransform_backward(work_c)
     PC2SRC_loc(3) = sum(phi * up(:,:,:,3) * realpart(work_c))
     call mpi_allreduce(PC2SRC_loc, stats%PC2SRC, 3, MPI_REAL_WP, MPI_SUM,     &
       fft%pg%comm)
@@ -571,7 +591,7 @@ contains
       xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
     this%fft_pg = pgrid(this%fft_sg, GROUP, (/ sim_pg%npx, sim_pg%npy,        &
       sim_pg%npz /))
-    this%fft = fft3d(this%fft_pg)
+    this%fft = cfourier(this%fft_pg)
 
     ! allocate arrays
     li = this%fft_pg%imin_; lj = this%fft_pg%jmin_; lk = this%fft_pg%kmin_;

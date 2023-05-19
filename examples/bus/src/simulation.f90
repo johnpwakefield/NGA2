@@ -8,7 +8,7 @@ module simulation
    use scalar_class,      only: scalar
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    use datafile_class,    only: datafile
    use mpi_f08
@@ -23,13 +23,13 @@ module simulation
    type(sgsmodel),    public :: sgs
    
    !> Provide a datafile and an event tracker for saving restarts
-   type(event)    :: save_evt
+   type(periodic_event) :: save_evt
    type(datafile) :: df
    logical :: restarted
    
    !> Ensight postprocessing
    type(ensight) :: ens_out,psg_out
-   type(event)   :: ens_evt
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,intfile
@@ -285,7 +285,7 @@ contains
       restart_and_save: block ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT
          character(len=str_medium) :: dir_restart
          ! Create event for saving restart files
-         save_evt=event(time,'Restart output')
+         save_evt=periodic_event(time,'Restart output')
          call param_read('Restart output period',save_evt%tper)
          ! Check if we are restarting
          call param_read(tag='Restart from',val=dir_restart,short='r',default='')
@@ -486,7 +486,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='bus')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)

@@ -6,7 +6,7 @@ module simulation
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use monitor_class,     only: monitor
    implicit none
    private
@@ -16,9 +16,9 @@ module simulation
    type(timetracker), public :: time
    
    !> Ensight postprocessing
-   type(partmesh) :: pmesh
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(partmesh)       :: pmesh
+   type(ensight)        :: ens_out
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile
@@ -26,7 +26,7 @@ module simulation
    public :: simulation_init,simulation_run,simulation_final
    
    !> Fluid phase arrays
-   real(WP), dimension(:,:,:), allocatable :: U,V,W
+   real(WP), dimension(:,:,:), allocatable :: U,V,W,srcU,srcV,srcW
    real(WP), dimension(:,:,:), allocatable :: rho,visc
    
 contains
@@ -115,6 +115,9 @@ contains
          allocate(U(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
          allocate(V(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
          allocate(W(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
+         allocate(srcU(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
+         allocate(srcV(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
+         allocate(srcW(lp%cfg%imino_:lp%cfg%imaxo_,lp%cfg%jmino_:lp%cfg%jmaxo_,lp%cfg%kmino_:lp%cfg%kmaxo_))
          ! Initialize to solid body rotation
          do k=lp%cfg%kmino_,lp%cfg%kmaxo_
             do j=lp%cfg%jmino_,lp%cfg%jmaxo_
@@ -148,13 +151,13 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=lp%cfg,name='particles')
          ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
+         ens_evt=periodic_event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_particle('particles',pmesh)
          call ens_out%add_vector('velocity',U,V,W)
-         call ens_out%add_vector('source',lp%srcU,lp%srcV,lp%srcW)
-         call ens_out%add_scalar('epsp',lp%VF)
+         call ens_out%add_vector('source',srcU,srcV,srcW)
+         call ens_out%add_scalar('epsp',cfg%VF)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight

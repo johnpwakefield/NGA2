@@ -13,7 +13,7 @@ module simulation
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
    use partmesh_class,    only: partmesh
-   use event_class,       only: event
+   use event_class,       only: periodic_event
    use datafile_class,    only: datafile
    use monitor_class,     only: monitor
    implicit none
@@ -28,17 +28,17 @@ module simulation
    type(lpt),         public :: lp
    
    !> Provide two datafiles and an event tracker for saving restarts
-   type(event)    :: save_evt
+   type(periodic_event) :: save_evt
    type(datafile) :: df
    character(len=str_medium) :: irl_file
    character(len=str_medium) :: lpt_file
    logical :: restarted
    
    !> Ensight postprocessing
-   type(surfmesh) :: smesh
-   type(partmesh) :: pmesh
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt
+   type(surfmesh)       :: smesh
+   type(partmesh)       :: pmesh
+   type(ensight)        :: ens_out
+   type(periodic_event) :: ens_evt
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,sprayfile
@@ -215,7 +215,7 @@ contains
          ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
          time=timetracker(cfg%amRoot,name='nozzle_exterior')
          ! Create event for saving restart files
-         save_evt=event(time,'Restart output')
+         save_evt=periodic_event(time,'Restart output')
          call param_read('Restart output period',save_evt%tper)
          ! Check if we are restarting
          call param_read(tag='Restart from',val=dir_restart,short='r',default='')
@@ -512,7 +512,7 @@ contains
          ! Create Ensight output from cfg
          ens_out=ensight(cfg,'atom')
          ! Create event for Ensight output
-         ens_evt=event(time,'Ensight output')
+         ens_evt=periodic_event(time,'Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)

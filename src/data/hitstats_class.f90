@@ -672,7 +672,7 @@ contains
     real(WP) :: thickness, height
     real(WP), dimension(2) :: z
     integer, dimension(3) :: partition
-    logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group  
+    logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group
     integer, dimension(3,this%sim_pg%nproc) :: ranges
     logical :: prev
 
@@ -688,6 +688,8 @@ contains
     height = 0.5_WP * this%sim_pg%zL / this%sim_pg%npz
     height = height + this%sim_pg%x(this%sim_pg%imin)
     z(1) = height; z(2) = height + thickness;
+    if (this%sim_pg%rank .eq. 0) write(*,*) "proc: ", this%sim_pg%rank, ", sli&
+      &ce span: ", z
     this%ens_sg = sgrid(coord=cartesian, no=1,                                &
       x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
       y=this%fft_pg%y(this%fft_pg%jmin:this%fft_pg%jmax+1),                   &

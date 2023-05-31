@@ -9,15 +9,15 @@ module partmesh_class
    
    !> Particle mesh object
    type :: partmesh
-      character(len=str_medium) :: name='PARTMESH'                      !< Name for the particle mesh
-      integer :: n                                                      !< Number of particles
-      real(WP), dimension(:,:), allocatable :: pos                      !< Position of the particles
-      integer :: nvar                                                   !< Number of particle scalars stored
-      integer :: nvec                                                   !< Number of particle vectors stored
-      real(WP), dimension(:,:), allocatable :: var                      !< Particle scalar storage
-      real(WP), dimension(:,:,:), allocatable :: vec                    !< Particle vector storage
-      character(len=str_medium), dimension(:), allocatable :: varname   !< Name of particle scalar fields
-      character(len=str_medium), dimension(:), allocatable :: vecname   !< Name of particle vector fields
+      character(len=str_medium) :: name='PARTMESH'                  !< Name for the particle mesh
+      integer :: n                                                  !< Number of particles
+      real(WP), dimension(:,:), pointer :: pos                      !< Position of the particles
+      integer :: nvar                                               !< Number of particle scalars stored
+      integer :: nvec                                               !< Number of particle vectors stored
+      real(WP), dimension(:,:), pointer :: var                      !< Particle scalar storage
+      real(WP), dimension(:,:,:), pointer :: vec                    !< Particle vector storage
+      character(len=str_medium), dimension(:), pointer :: varname   !< Name of particle scalar fields
+      character(len=str_medium), dimension(:), pointer :: vecname   !< Name of particle vector fields
    contains
       procedure :: reset                                   !< Reset particle mesh to zero size
       procedure :: set_size                                !< Set particle mesh to provided size
@@ -50,6 +50,7 @@ contains
       self%nvec=nvec
       allocate(self%vecname(self%nvec))
       self%vecname='' !< Users will set the name themselves
+      self%pos=>null(); self%var=>null(); self%vec=>null();
    end function constructor
    
    
@@ -58,9 +59,9 @@ contains
       implicit none
       class(partmesh), intent(inout) :: this
       this%n=0
-      if (allocated(this%pos)) deallocate(this%pos)
-      if (allocated(this%var)) deallocate(this%var)
-      if (allocated(this%vec)) deallocate(this%vec)
+      if (associated(this%pos)) deallocate(this%pos)
+      if (associated(this%var)) deallocate(this%var)
+      if (associated(this%vec)) deallocate(this%vec)
    end subroutine reset
    
    

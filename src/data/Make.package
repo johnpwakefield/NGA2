@@ -1,4 +1,4 @@
-f90EXE_sources += datafile_class.f90 ensight_class.f90
+f90EXE_sources += datafile_class.f90 ensight_class.f90 npy_class.f90
 
 ifeq ($(USE_FFTW),TRUE)
   f90EXE_sources += hitstats_class.f90

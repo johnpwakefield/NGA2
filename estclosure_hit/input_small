@@ -41,7 +41,7 @@ EC FFT mesh       : 128 128 128
 EC filter list    : filterlist.txt
 
 # HS Parameters
-HS write ensight              : true
+HS write slice                : true
 HS slice thickness proportion : 0.2
 
 # Time integration

@@ -14,7 +14,7 @@ module hitstats
   use pgrid_class,      only: pgrid
   use config_class,     only: config
   use lpt_class,        only: lpt
-  use ensight_class,    only: ensight
+  use npy_class,        only: npy
   use coupler_class,    only: coupler
   use lptcoupler_class, only: lptcoupler
   use partmesh_class,   only: partmesh
@@ -75,10 +75,10 @@ module hitstats
     integer :: type
     real(WP), dimension(FLT_NUM_PARAMS) :: params
     complex(WP), dimension(:,:,:), allocatable :: flt_f
-    ! ensight optional for each filter
-    logical :: use_ensight
-    real(WP), dimension(:,:,:), pointer :: ens_phi
-    real(WP), dimension(:,:,:,:), pointer :: ens_up, ens_uf
+    ! io optional for each filter
+    logical :: use_slice_io
+    real(WP), dimension(:,:,:), pointer :: io_phi
+    real(WP), dimension(:,:,:,:), pointer :: io_up, io_uf
   contains
     procedure :: init => filter_init
     final :: filter_destruct
@@ -90,7 +90,7 @@ module hitstats
     type(lpt), pointer :: ps
     type(sgrid) :: fft_sg
     type(pgrid) :: fft_pg
-    type(cfourier) :: fft
+    type(cfourier), pointer :: fft
     integer :: num_filters
     type(microstats) :: mstats
     type(filter), dimension(:), pointer :: filters
@@ -99,20 +99,20 @@ module hitstats
     real(WP), dimension(:,:,:), allocatable :: work_r
     real(WP), dimension(:,:,:), pointer :: phi, phicheck
     real(WP), dimension(:,:,:,:), pointer :: up, uf
-    ! only used for ensight output
-    type(sgrid) :: ens_sg
-    type(config) :: ens_cfg
-    type(MPI_GROUP) :: ens_grp
-    logical :: in_ens_grp
-    type(coupler) :: ens_cpl
-    type(ensight) :: ens_out
-    type(lpt) :: ens_lpt
-    type(lptcoupler) :: ens_lptcpl
-    type(partmesh) :: ens_pmesh
+    ! only used for slice io
+    type(sgrid) :: io_sg
+    type(config) :: io_cfg
+    type(MPI_GROUP) :: io_grp
+    logical :: in_io_grp
+    type(coupler), pointer :: io_cpl
+    type(npy) :: io_out
+    type(lpt) :: io_lpt
+    type(lptcoupler), pointer :: io_lptcpl
+    type(partmesh) :: io_pmesh
   contains
     procedure :: init => filterset_init
-    procedure :: setup_ensight => filterset_setup_ensight
-    procedure :: write_ensight => filterset_write_ensight
+    procedure :: setup_sliceio => filterset_setup_sliceio
+    procedure :: write_sliceio => filterset_write_sliceio
     procedure :: compute_stats => filterset_compute_stats
     final :: filterset_destruct
   end type filterset
@@ -569,7 +569,7 @@ contains
     real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
     type(filter_info_row) :: f_info_raw
     integer :: li, hi, lj, hj, lk, hk, i, fh, ierr
-    logical :: use_ensight
+    logical :: use_slice_io
 
     ! store pointer to simulation config and data
     this%sim_pg => sim_pg; this%ps => ps;
@@ -591,7 +591,7 @@ contains
       xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
     this%fft_pg = pgrid(this%fft_sg, GROUP, (/ sim_pg%npx, sim_pg%npy,        &
       sim_pg%npz /))
-    this%fft = cfourier(this%fft_pg)
+    allocate(this%fft, source=cfourier(this%fft_pg))
 
     ! allocate arrays
     li = this%fft_pg%imin_; lj = this%fft_pg%jmin_; lk = this%fft_pg%kmin_;
@@ -604,7 +604,7 @@ contains
 
     ! read filter info (as root)
     if (sim_pg%rank .eq. 0) then
-      call param_read('HS write ensight', use_ensight)
+      call param_read('HS write slice', use_slice_io)
       open(newunit=fh, file=filterfile, action='READ', access='SEQUENTIAL')
       this%num_filters = 0
       do
@@ -627,7 +627,7 @@ contains
         end select
         this%filters(i)%filtername = f_info_raw%out_fname
         this%filters(i)%params(:) = f_info_raw%params(:)
-        this%filters(i)%use_ensight = use_ensight
+        this%filters(i)%use_slice_io = use_slice_io
       end do
       close(fh)
     end if
@@ -642,13 +642,13 @@ contains
       call mpi_bcast(this%filters(i)%type, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
       call mpi_bcast(this%filters(i)%params, FLT_NUM_PARAMS, MPI_REAL_WP, 0,  &
         sim_pg%comm, ierr)
-      call mpi_bcast(this%filters(i)%use_ensight, 1, MPI_LOGICAL, 0,           &
+      call mpi_bcast(this%filters(i)%use_slice_io, 1, MPI_LOGICAL, 0,           &
         sim_pg%comm, ierr)
       call this%filters(i)%init(this%fft)
     end do
 
-    ! set all processes to not be ensight processes until it's set up
-    this%in_ens_grp = .false.
+    ! set all processes to not be io processes until it's set up
+    this%in_io_grp = .false.
 
     ! announce success
     if (sim_pg%rank .eq. 0) then
@@ -657,7 +657,7 @@ contains
 
   end subroutine filterset_init
 
-  subroutine filterset_setup_ensight(this)
+  subroutine filterset_setup_sliceio(this)
     use mpi_f08    !,  only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR,           &
       !mpi_allreduce, mpi_bcast
     use parallel, only: MPI_REAL_WP
@@ -676,9 +676,9 @@ contains
     integer, dimension(3,this%sim_pg%nproc) :: ranges
     logical :: prev
 
-    ! the the ensight group we use the parallel decomposition of the first
+    ! the the io group we use the parallel decomposition of the first
     ! two indices used for the simulation and index 1 in the third dimension;
-    ! this means things will run slightly faster if ens_idx is in the first
+    ! this means things will run slightly faster if io_idx is in the first
     ! 1/npz-th of the domain
 
     if (this%sim_pg%amroot)                                                  &
@@ -690,7 +690,7 @@ contains
     z(1) = height; z(2) = height + thickness;
     if (this%sim_pg%rank .eq. 0) write(*,*) "proc: ", this%sim_pg%rank, ", sli&
       &ce span: ", z
-    this%ens_sg = sgrid(coord=cartesian, no=1,                                &
+    this%io_sg = sgrid(coord=cartesian, no=1,                                &
       x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
       y=this%fft_pg%y(this%fft_pg%jmin:this%fft_pg%jmax+1),                   &
       z=z, xper=.true., yper=.true., zper=.false., name='HITFILTSLICE')
@@ -717,64 +717,64 @@ contains
     end do
     if (prev) ranges(2,j) = this%sim_pg%nproc - 1
     ranges(3,:) = 1
-    if (j .ne. n) call die("[EC] error determining ensight group")
+    if (j .ne. n) call die("[EC] error determining io group")
     call mpi_group_range_incl(this%sim_pg%group, n, ranges(1:3,1:n),          &
-      this%ens_grp, ierr)
-    this%in_ens_grp = in_group(this%sim_pg%rank+1)
+      this%io_grp, ierr)
+    this%in_io_grp = in_group(this%sim_pg%rank+1)
 
     partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, 1 /)
-    if (this%in_ens_grp) then
-      this%ens_cfg = config(grp=this%ens_grp, decomp=partition, grid=this%ens_sg)
-      this%ens_lpt = lpt(cfg=this%ens_cfg, name='HITSLICE')
-      this%ens_cfg%VF = 1.0_WP
-      this%ens_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
-      this%ens_pmesh%varname(1) = "id"
-      this%ens_pmesh%varname(2) = "dp"
-      this%ens_pmesh%vecname(1) = "vel"
-      this%ens_pmesh%vecname(2) = "fld"
+    if (this%in_io_grp) then
+      this%io_cfg = config(grp=this%io_grp, decomp=partition, grid=this%io_sg)
+      this%io_lpt = lpt(cfg=this%io_cfg, name='HITSLICE')
+      this%io_cfg%VF = 1.0_WP
+      this%io_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
+      this%io_pmesh%varname(1) = "id"
+      this%io_pmesh%varname(2) = "dp"
+      this%io_pmesh%vecname(1) = "vel"
+      this%io_pmesh%vecname(2) = "fld"
     end if
-    this%ens_cpl = coupler(src_grp=this%sim_pg%group, dst_grp=this%ens_grp,   &
-      name='HITFILTSLICE')
-    this%ens_lptcpl = lptcoupler(src_grp=this%sim_pg%group,                   &
-      dst_grp=this%ens_grp, name='HITPARTSLICE')
-    call this%ens_cpl%set_src(this%fft_pg)
-    call this%ens_lptcpl%set_src(this%ps)
-    if (this%in_ens_grp) then
-      call this%ens_cpl%set_dst(this%ens_cfg)
-      call this%ens_lptcpl%set_dst(this%ens_lpt)
+    allocate(this%io_cpl, source=coupler(src_grp=this%sim_pg%group,           &
+      dst_grp=this%io_grp, name='HITFILTSLICE'))
+    allocate(this%io_lptcpl, source=lptcoupler(src_grp=this%sim_pg%group,     &
+      dst_grp=this%io_grp, name='HITPARTSLICE'))
+    call this%io_cpl%set_src(this%fft_pg)
+    call this%io_lptcpl%set_src(this%ps)
+    if (this%in_io_grp) then
+      call this%io_cpl%set_dst(this%io_cfg)
+      call this%io_lptcpl%set_dst(this%io_lpt)
     end if
-    call this%ens_cpl%initialize()
-    call this%ens_lptcpl%initialize()
-    if (this%in_ens_grp) then
-      this%ens_out = ensight(cfg=this%ens_cfg, name='hitslice')
-      call this%ens_out%add_particle('partslice', this%ens_pmesh)
+    call this%io_cpl%initialize()
+    call this%io_lptcpl%initialize()
+    if (this%in_io_grp) then
+      this%io_out = npy(pg=this%io_cfg, folder='hitslice')
+      call this%io_out%add_particle('partslice', this%io_pmesh)
     end if
 
     do n = 1, this%num_filters
       flt => this%filters(n)
-      if (.not. flt%use_ensight .or. .not. this%in_ens_grp) cycle
-      li = this%ens_cfg%imino_; hi = this%ens_cfg%imaxo_;
-      lj = this%ens_cfg%jmino_; hj = this%ens_cfg%jmaxo_;
-      lk = this%ens_cfg%kmino_; hk = this%ens_cfg%kmaxo_;
-      allocate(flt%ens_phi(li:hi,lj:hj,lk:hk),                                &
-        flt%ens_up(li:hi,lj:hj,lk:hk,3), flt%ens_uf(li:hi,lj:hj,lk:hk,3))
-      call this%ens_out%add_scalar(trim(flt%filtername) // 'phi', flt%ens_phi)
-      vx => flt%ens_up(:,:,:,1); vy => flt%ens_up(:,:,:,2); vz => flt%ens_up(:,:,:,3);
-      call this%ens_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
-      vx => flt%ens_uf(:,:,:,1); vy => flt%ens_uf(:,:,:,2); vz => flt%ens_uf(:,:,:,3);
-      call this%ens_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
+      if (.not. flt%use_slice_io .or. .not. this%in_io_grp) cycle
+      li = this%io_cfg%imino_; hi = this%io_cfg%imaxo_;
+      lj = this%io_cfg%jmino_; hj = this%io_cfg%jmaxo_;
+      lk = this%io_cfg%kmino_; hk = this%io_cfg%kmaxo_;
+      allocate(flt%io_phi(li:hi,lj:hj,lk:hk),                                &
+        flt%io_up(li:hi,lj:hj,lk:hk,3), flt%io_uf(li:hi,lj:hj,lk:hk,3))
+      call this%io_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_phi)
+      vx => flt%io_up(:,:,:,1); vy => flt%io_up(:,:,:,2); vz => flt%io_up(:,:,:,3);
+      call this%io_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
+      vx => flt%io_uf(:,:,:,1); vy => flt%io_uf(:,:,:,2); vz => flt%io_uf(:,:,:,3);
+      call this%io_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
     end do
 
-  end subroutine filterset_setup_ensight
+  end subroutine filterset_setup_sliceio
 
-  subroutine filterset_write_ensight(this, t)
+  subroutine filterset_write_sliceio(this, t)
     implicit none
     class(filterset), intent(inout) :: this
     real(WP), intent(in) :: t
 
-    if (this%in_ens_grp) call this%ens_out%write_data(t)
+    if (this%in_io_grp) call this%io_out%write_data(t)
 
-  end subroutine filterset_write_ensight
+  end subroutine filterset_write_sliceio
 
   subroutine filterset_compute_stats(this, step)
     implicit none
@@ -794,35 +794,35 @@ contains
       call compute_filter_stats(this%filters(n)%fstats, this%fft,             &
         this%filters(n), step, this%phi_in_f, this%up_in_f, this%uf_in_f,     &
         this%phi, this%phicheck, this%up, this%uf, this%work_r, this%work_c)
-      if (this%filters(n)%use_ensight) then
+      if (this%filters(n)%use_slice_io) then
         ! transfer continuum properties
-        call this%ens_cpl%push(this%phi)
-        call this%ens_cpl%transfer()
-        if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_phi)
+        call this%io_cpl%push(this%phi)
+        call this%io_cpl%transfer()
+        if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_phi)
         do m = 1, 3
-          call this%ens_cpl%push(this%up(:,:,:,m))
-          call this%ens_cpl%transfer()
-          if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_up(:,:,:,m))
-          call this%ens_cpl%push(this%uf(:,:,:,m))
-          call this%ens_cpl%transfer()
-          if (this%in_ens_grp) call this%ens_cpl%pull(this%filters(n)%ens_uf(:,:,:,m))
+          call this%io_cpl%push(this%up(:,:,:,m))
+          call this%io_cpl%transfer()
+          if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_up(:,:,:,m))
+          call this%io_cpl%push(this%uf(:,:,:,m))
+          call this%io_cpl%transfer()
+          if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_uf(:,:,:,m))
         end do
         ! transfer particle properties to lpt
-        call this%ens_lptcpl%push()
-        call this%ens_lptcpl%transfer()
-        if (this%in_ens_grp) call this%ens_lptcpl%pull()
+        call this%io_lptcpl%push()
+        call this%io_lptcpl%transfer()
+        if (this%in_io_grp) call this%io_lptcpl%pull()
         ! transfer particles to pmesh
-        if (this%in_ens_grp) then
-          call this%ens_pmesh%reset()
-          call this%ens_pmesh%set_size(this%ens_lpt%np_)
-          do i = 1, this%ens_lpt%np_
-            this%ens_pmesh%pos(:,i) = this%ens_lpt%p(i)%pos
-            this%ens_pmesh%var(1,i) = this%ens_lpt%p(i)%id
-            this%ens_pmesh%var(2,i) = this%ens_lpt%p(i)%d
-            this%ens_pmesh%vec(:,1,i) = this%ens_lpt%p(i)%vel
-            ind = this%ps%cfg%get_ijk_global(this%ens_lpt%p(i)%pos)
-            this%ens_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
-              pos=this%ens_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
+        if (this%in_io_grp) then
+          call this%io_pmesh%reset()
+          call this%io_pmesh%set_size(this%io_lpt%np_)
+          do i = 1, this%io_lpt%np_
+            this%io_pmesh%pos(:,i) = this%io_lpt%p(i)%pos
+            this%io_pmesh%var(1,i) = this%io_lpt%p(i)%id
+            this%io_pmesh%var(2,i) = this%io_lpt%p(i)%d
+            this%io_pmesh%vec(:,1,i) = this%io_lpt%p(i)%vel
+            ind = this%ps%cfg%get_ijk_global(this%io_lpt%p(i)%pos)
+            this%io_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
+              pos=this%io_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
               U=this%U, V=this%V, W=this%W)
           end do
         end if
@@ -843,7 +843,7 @@ contains
 
     do n = 1, this%num_filters
       flt => this%filters(n)
-      if (flt%use_ensight) deallocate(flt%ens_phi, flt%ens_up, flt%ens_uf)
+      if (flt%use_slice_io) deallocate(flt%io_phi, flt%io_up, flt%io_uf)
     end do
 
   end subroutine filterset_destruct

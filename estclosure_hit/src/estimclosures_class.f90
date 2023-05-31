@@ -63,8 +63,8 @@ module estimclosures_class
     !procedure, deferred :: get_interval
     procedure :: compute_statistics
     procedure :: monitor_setup => ec_monitor_setup
-    procedure :: ensight_setup => ec_ensight_setup
-    procedure :: ensight_write => ec_ensight_write
+    procedure :: io_setup => ec_io_setup
+    procedure :: io_write => ec_io_write
     procedure :: destruct => ec_destruct
   end type estimclosures
 
@@ -344,24 +344,24 @@ contains
 
   end subroutine ec_destruct
 
-  subroutine ec_ensight_setup(ec)
-    use ensight_class, only: ensight
+  subroutine ec_io_setup(ec)
+    use npy_class, only: npy
     implicit none
     class(estimclosures), intent(inout) :: ec
 
-    call ec%hs%setup_ensight()
+    call ec%hs%setup_sliceio()
 
-  end subroutine ec_ensight_setup
+  end subroutine ec_io_setup
 
-  subroutine ec_ensight_write(ec, t)
-    use ensight_class, only: ensight
+  subroutine ec_io_write(ec, t)
+    use npy_class, only: npy
     implicit none
     class(estimclosures), intent(inout) :: ec
     real(WP), intent(in) :: t
 
-    call ec%hs%write_ensight(t)
+    call ec%hs%write_sliceio(t)
 
-  end subroutine ec_ensight_write
+  end subroutine ec_io_write
 
   subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time, step)
     implicit none

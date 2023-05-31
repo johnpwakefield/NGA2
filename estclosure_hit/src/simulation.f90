@@ -418,9 +418,9 @@ contains
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_particle('particles',pmesh)
       ! Set up ensight output for filtered quantities
-      call ec%ensight_setup()
+      call ec%io_setup()
       call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n)
-      call ec%ensight_write(time%t)
+      call ec%io_write(time%t)
       ! Output to ensight
       if (.not. ens_at_ints .and. ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
@@ -664,7 +664,7 @@ contains
         real(WP) :: interval
 
         call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, ETA, nu, time%t, time%n)
-        call ec%ensight_write(time%t)
+        call ec%io_write(time%t)
 
         if (ens_at_ints) then
           call update_pmesh()

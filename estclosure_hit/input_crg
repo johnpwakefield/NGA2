@@ -42,7 +42,7 @@ EC filter list    : filterlist.txt
 EC output period  : 1e-0
 
 # HS Parameters
-HS write ensight  : true
+HS write slice    : true
 
 # Time integration
 Max timestep size : 1e-2

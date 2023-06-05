@@ -9,8 +9,6 @@ module npy_class
   ! limitations:
   !  -  doesn't work on big endian systems (shouldn't be too hard to fix, but
   !     I am lazy)
-  !  -  does not work for arrays with more than 9999 cells in any direction
-  !     (easy to fix; change i4 to a suitably larger width)
   !  -  this is *not* a performant way to write large amounts of data; it is
   !     an easy way to do analysis on small amounts of data through python
   !     without all the trouble of using an ensight reader
@@ -570,13 +568,13 @@ contains
       call die('unsupported precision')
     end if
     if (size(dims) .eq. 1) then
-      write(dimstring, '(i4)') dims(1)
+      write(dimstring, '(i16)') dims(1)
     elseif (size(dims) .eq. 2) then
-      write(dimstring, '(i4,a,i4)') dims(1), ",", dims(2)
+      write(dimstring, '(i16,a,i16)') dims(1), ",", dims(2)
     elseif (size(dims) .eq. 3) then
-      write(dimstring, '(i4,a,i4,a,i4)') dims(1), ",", dims(2), ",", dims(3)
+      write(dimstring, '(i16,a,i16,a,i16)') dims(1), ",", dims(2), ",", dims(3)
     elseif (size(dims) .eq. 4) then
-      write(dimstring, '(i4,a,i4,a,i4,a,i4)') dims(1), ",", dims(2), ",",     &
+      write(dimstring, '(i16,a,i16,a,i16,a,i16)') dims(1), ",", dims(2), ",", &
         dims(3), ",", dims(4)
     else
       call die('unsupported number of dimensions')

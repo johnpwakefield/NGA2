@@ -686,6 +686,8 @@ contains
     ! 1/npz-th of the domain and io_xz_idx in in the first 1/npy-th of the
     ! domain
 
+    !TODO add option to save slices at lower resolution than the fft grid
+
     ! xy geometry
     if (this%sim_pg%amroot)                                                  &
       call param_read('HS slice thickness proportion', thickness)

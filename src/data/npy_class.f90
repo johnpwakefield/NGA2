@@ -1,6 +1,6 @@
 module npy_class
   use precision, only: WP
-  use string, only: str_short, str_medium, str_long
+  use string, only: str_medium, str_long
   use pgrid_class, only: pgrid
   use partmesh_class, only: partmesh
   implicit none
@@ -24,7 +24,7 @@ module npy_class
   character(len=*), parameter :: DEFAULT_PATH = "./npy/"
 
   ! constants needed for the npy format
-  integer, parameter :: FIELDLEN = str_short
+  integer, parameter :: FIELDLEN = str_medium
   character(len=*), parameter :: NPYDIR = "./npy/"
   character(len=*), parameter :: NPYMETA = "meta.json"
   character(len=*), parameter :: NPYMAGIC = transfer(-109_1, 'x') // 'NUMPY'
@@ -467,7 +467,8 @@ contains
     write(unit_actual, '(a)') """partgroups"" : {"
     pitem => plist
     do while (associated(pitem))
-      call write_meta_part_desc(unit_actual, pitem%name,  pitem%pm)
+      call write_meta_part_desc(unit_actual, pitem%name,  pitem%pm,           &
+        associated(pitem%next))
       pitem => plist%next
     end do
     write(unit_actual, '(a)') "},"
@@ -477,7 +478,7 @@ contains
     call write_meta_number_list(unit_actual, "y", ys)
     call write_meta_number_list(unit_actual, "z", zs)
     call write_meta_number_list(unit_actual, "t", ts)
-    write(unit_actual, '(a)') """fieldfilenames"" : ""{field:}_{n:08d}.npy"""
+    write(unit_actual, '(a)') """fieldfilenames"" : ""{field:}_{n:08d}.npy"","
     write(unit_actual, '(a)') """particlefilenames"" : ""{partgroup:}_{prop:}_{n:08d}.npy"""
     write(unit_actual, '(a)') "}"
 
@@ -485,11 +486,12 @@ contains
 
   end subroutine write_meta_sub
 
-  subroutine write_meta_part_desc(unit, label, pm)
+  subroutine write_meta_part_desc(unit, label, pm, inclcomma)
     implicit none
     integer, intent(in) :: unit
     character(len=*), intent(in) :: label
     type(partmesh), intent(in) :: pm
+    logical, intent(in) :: inclcomma
     integer :: i
 
     write(unit, '(3a)') "    """, trim(label), """ : {"
@@ -504,8 +506,12 @@ contains
       write(unit, '(3a)', advance='no') """", trim(pm%vecname(i)), """"
       if (i .ne. pm%nvar) write(unit, '(a)', advance='no') ", "
     end do
-    write(unit, '(a)') "],"
-    write(unit, '(a)') "    },"
+    write(unit, '(a)') "]"
+    if (inclcomma) then
+      write(unit, '(a)') "    },"
+    else
+      write(unit, '(a)') "    }"
+    end if
 
   end subroutine write_meta_part_desc
 

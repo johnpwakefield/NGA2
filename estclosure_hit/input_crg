@@ -52,5 +52,5 @@ Max iter          : 9999999
 
 # Ensight output
 Ensight output period : 1.0
-Ensight at intervals  : true
+Ensight at intervals  : false
 

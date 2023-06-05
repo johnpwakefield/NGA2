@@ -43,6 +43,7 @@ EC filter list    : filterlist.txt
 # HS Parameters
 HS write slice                : true
 HS slice thickness proportion : 0.2
+HS slice height proportion    : 0.2
 
 # Time integration
 Max timestep size : 1e-1

@@ -76,9 +76,9 @@ module hitstats
     real(WP), dimension(FLT_NUM_PARAMS) :: params
     complex(WP), dimension(:,:,:), allocatable :: flt_f
     ! io optional for each filter
-    logical :: use_slice_io
-    real(WP), dimension(:,:,:), pointer :: io_phi
-    real(WP), dimension(:,:,:,:), pointer :: io_up, io_uf
+    logical :: use_slice_xy_io, use_slice_xz_io
+    real(WP), dimension(:,:,:), pointer :: io_xy_phi, io_xz_phi
+    real(WP), dimension(:,:,:,:), pointer :: io_xy_up, io_xy_uf, io_xz_up, io_xz_uf
   contains
     procedure :: init => filter_init
     final :: filter_destruct
@@ -100,15 +100,15 @@ module hitstats
     real(WP), dimension(:,:,:), pointer :: phi, phicheck
     real(WP), dimension(:,:,:,:), pointer :: up, uf
     ! only used for slice io
-    type(sgrid) :: io_sg
-    type(config) :: io_cfg
-    type(MPI_GROUP) :: io_grp
-    logical :: in_io_grp
-    type(coupler), pointer :: io_cpl
-    type(npy) :: io_out
-    type(lpt) :: io_lpt
-    type(lptcoupler), pointer :: io_lptcpl
-    type(partmesh) :: io_pmesh
+    type(sgrid) :: io_xy_sg, io_xz_sg
+    type(config) :: io_xy_cfg, io_xz_cfg
+    type(MPI_GROUP) :: io_xy_grp, io_xz_grp
+    logical :: in_io_xy_grp, in_io_xz_grp
+    type(coupler), pointer :: io_xy_cpl, io_xz_cpl
+    type(npy) :: io_xy_out, io_xz_out
+    type(lpt) :: io_xy_lpt, io_xz_lpt
+    type(lptcoupler), pointer :: io_xy_lptcpl, io_xz_lptcpl
+    type(partmesh) :: io_xy_pmesh, io_xz_pmesh
   contains
     procedure :: init => filterset_init
     procedure :: setup_sliceio => filterset_setup_sliceio
@@ -569,7 +569,7 @@ contains
     real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
     type(filter_info_row) :: f_info_raw
     integer :: li, hi, lj, hj, lk, hk, i, fh, ierr
-    logical :: use_slice_io
+    logical :: use_slice_xy_io, use_slice_xz_io
 
     ! store pointer to simulation config and data
     this%sim_pg => sim_pg; this%ps => ps;
@@ -604,7 +604,8 @@ contains
 
     ! read filter info (as root)
     if (sim_pg%rank .eq. 0) then
-      call param_read('HS write slice', use_slice_io)
+      call param_read('HS write slice', use_slice_xy_io)
+      call param_read('HS write slice', use_slice_xz_io)
       open(newunit=fh, file=filterfile, action='READ', access='SEQUENTIAL')
       this%num_filters = 0
       do
@@ -627,7 +628,8 @@ contains
         end select
         this%filters(i)%filtername = f_info_raw%out_fname
         this%filters(i)%params(:) = f_info_raw%params(:)
-        this%filters(i)%use_slice_io = use_slice_io
+        this%filters(i)%use_slice_xy_io = use_slice_xy_io
+        this%filters(i)%use_slice_xz_io = use_slice_xz_io
       end do
       close(fh)
     end if
@@ -642,13 +644,15 @@ contains
       call mpi_bcast(this%filters(i)%type, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
       call mpi_bcast(this%filters(i)%params, FLT_NUM_PARAMS, MPI_REAL_WP, 0,  &
         sim_pg%comm, ierr)
-      call mpi_bcast(this%filters(i)%use_slice_io, 1, MPI_LOGICAL, 0,           &
+      call mpi_bcast(this%filters(i)%use_slice_xy_io, 1, MPI_LOGICAL, 0,      &
+        sim_pg%comm, ierr)
+      call mpi_bcast(this%filters(i)%use_slice_xz_io, 1, MPI_LOGICAL, 0,      &
         sim_pg%comm, ierr)
       call this%filters(i)%init(this%fft)
     end do
 
     ! set all processes to not be io processes until it's set up
-    this%in_io_grp = .false.
+    this%in_io_xy_grp = .false.; this%in_io_xz_grp = .false.;
 
     ! announce success
     if (sim_pg%rank .eq. 0) then
@@ -678,9 +682,11 @@ contains
 
     ! the the io group we use the parallel decomposition of the first
     ! two indices used for the simulation and index 1 in the third dimension;
-    ! this means things will run slightly faster if io_idx is in the first
-    ! 1/npz-th of the domain
+    ! this means things will run slightly faster if io_xy_idx is in the first
+    ! 1/npz-th of the domain and io_xz_idx in in the first 1/npy-th of the
+    ! domain
 
+    ! xy geometry
     if (this%sim_pg%amroot)                                                  &
       call param_read('HS slice thickness proportion', thickness)
     call mpi_bcast(thickness, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
@@ -688,13 +694,24 @@ contains
     height = 0.5_WP * this%sim_pg%zL / this%sim_pg%npz
     height = height + this%sim_pg%x(this%sim_pg%imin)
     z(1) = height; z(2) = height + thickness;
-    if (this%sim_pg%rank .eq. 0) write(*,*) "proc: ", this%sim_pg%rank, ", sli&
-      &ce span: ", z
-    this%io_sg = sgrid(coord=cartesian, no=1,                                &
+    this%io_xy_sg = sgrid(coord=cartesian, no=1,                              &
       x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
       y=this%fft_pg%y(this%fft_pg%jmin:this%fft_pg%jmax+1),                   &
-      z=z, xper=.true., yper=.true., zper=.false., name='HITFILTSLICE')
-    ! determine which group we're in
+      z=z, xper=.true., yper=.true., zper=.false., name='filtslice_xy')
+
+    ! xz geometry
+    if (this%sim_pg%amroot)                                                  &
+      call param_read('HS slice height proportion', height)
+    call mpi_bcast(height, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
+    height = this%sim_pg%yL * height
+    height = height + this%sim_pg%y(this%sim_pg%jmin)
+    z(1) = height; z(2) = height + thickness;
+    this%io_xz_sg = sgrid(coord=cartesian, no=1,                              &
+      x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
+      y=z, z=this%fft_pg%z(this%fft_pg%kmin:this%fft_pg%kmax+1),              &
+      xper=.true., yper=.false., zper=.true., name='filtslice_xz')
+
+    ! xy group
     in_group_loc(:) = .false.
     in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
     call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,             &
@@ -717,52 +734,127 @@ contains
     end do
     if (prev) ranges(2,j) = this%sim_pg%nproc - 1
     ranges(3,:) = 1
-    if (j .ne. n) call die("[EC] error determining io group")
+    if (j .ne. n) call die("[EC] error determining io xy group")
     call mpi_group_range_incl(this%sim_pg%group, n, ranges(1:3,1:n),          &
-      this%io_grp, ierr)
-    this%in_io_grp = in_group(this%sim_pg%rank+1)
+      this%io_xy_grp, ierr)
+    this%in_io_xy_grp = in_group(this%sim_pg%rank+1)
 
+    ! xz group
+    in_group_loc(:) = .false.
+    in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%jproc .eq. 1
+    call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,             &
+      MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
+    if (in_group(1)) then; n = 1; else; n = 0; end if;
+    do i = 2, this%sim_pg%nproc
+      if (in_group(i) .and. .not. in_group(i-1)) n = n + 1
+    end do
+    j = 0
+    prev = .false.
+    do i = 1, this%sim_pg%nproc
+      if (in_group(i) .and. .not. prev) then
+        j = j + 1
+        ranges(1,j) = i - 1
+      end if
+      if (.not. in_group(i) .and. prev) then
+        ranges(2,j) = i - 2
+      end if
+      prev = in_group(i)
+    end do
+    if (prev) ranges(2,j) = this%sim_pg%nproc - 1
+    ranges(3,:) = 1
+    if (j .ne. n) call die("[EC] error determining io xz group")
+    call mpi_group_range_incl(this%sim_pg%group, n, ranges(1:3,1:n),          &
+      this%io_xz_grp, ierr)
+    this%in_io_xz_grp = in_group(this%sim_pg%rank+1)
+
+    ! xy partition
     partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, 1 /)
-    if (this%in_io_grp) then
-      this%io_cfg = config(grp=this%io_grp, decomp=partition, grid=this%io_sg)
-      this%io_lpt = lpt(cfg=this%io_cfg, name='HITSLICE')
-      this%io_cfg%VF = 1.0_WP
-      this%io_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
-      this%io_pmesh%varname(1) = "id"
-      this%io_pmesh%varname(2) = "dp"
-      this%io_pmesh%vecname(1) = "vel"
-      this%io_pmesh%vecname(2) = "fld"
+    if (this%in_io_xy_grp) then
+      this%io_xy_cfg = config(grp=this%io_xy_grp, decomp=partition, grid=this%io_xy_sg)
+      this%io_xy_lpt = lpt(cfg=this%io_xy_cfg, name='hitslicexy')
+      this%io_xy_cfg%VF = 1.0_WP
+      this%io_xy_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
+      this%io_xy_pmesh%varname(1) = "id"
+      this%io_xy_pmesh%varname(2) = "dp"
+      this%io_xy_pmesh%vecname(1) = "vel"
+      this%io_xy_pmesh%vecname(2) = "fld"
     end if
-    allocate(this%io_cpl, source=coupler(src_grp=this%sim_pg%group,           &
-      dst_grp=this%io_grp, name='HITFILTSLICE'))
-    allocate(this%io_lptcpl, source=lptcoupler(src_grp=this%sim_pg%group,     &
-      dst_grp=this%io_grp, name='HITPARTSLICE'))
-    call this%io_cpl%set_src(this%fft_pg)
-    call this%io_lptcpl%set_src(this%ps)
-    if (this%in_io_grp) then
-      call this%io_cpl%set_dst(this%io_cfg)
-      call this%io_lptcpl%set_dst(this%io_lpt)
+    allocate(this%io_xy_cpl, source=coupler(src_grp=this%sim_pg%group,           &
+      dst_grp=this%io_xy_grp, name='hitfiltslicexy'))
+    allocate(this%io_xy_lptcpl, source=lptcoupler(src_grp=this%sim_pg%group,     &
+      dst_grp=this%io_xy_grp, name='hitpartslicexy'))
+    call this%io_xy_cpl%set_src(this%fft_pg)
+    call this%io_xy_lptcpl%set_src(this%ps)
+    if (this%in_io_xy_grp) then
+      call this%io_xy_cpl%set_dst(this%io_xy_cfg)
+      call this%io_xy_lptcpl%set_dst(this%io_xy_lpt)
     end if
-    call this%io_cpl%initialize()
-    call this%io_lptcpl%initialize()
-    if (this%in_io_grp) then
-      this%io_out = npy(pg=this%io_cfg, folder='hitslice')
-      call this%io_out%add_particle('partslice', this%io_pmesh)
+    call this%io_xy_cpl%initialize()
+    call this%io_xy_lptcpl%initialize()
+    if (this%in_io_xy_grp) then
+      this%io_xy_out = npy(pg=this%io_xy_cfg, folder='hitslicexy')
+      call this%io_xy_out%add_particle('partslice', this%io_xy_pmesh)
     end if
 
+    ! xz partition
+    partition(:) = (/ this%sim_pg%npx, 1, this%sim_pg%npz /)
+    if (this%in_io_xz_grp) then
+      this%io_xz_cfg = config(grp=this%io_xz_grp, decomp=partition, grid=this%io_xz_sg)
+      this%io_xz_lpt = lpt(cfg=this%io_xz_cfg, name='hitslicexz')
+      this%io_xz_cfg%VF = 1.0_WP
+      this%io_xz_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
+      this%io_xz_pmesh%varname(1) = "id"
+      this%io_xz_pmesh%varname(2) = "dp"
+      this%io_xz_pmesh%vecname(1) = "vel"
+      this%io_xz_pmesh%vecname(2) = "fld"
+    end if
+    allocate(this%io_xz_cpl, source=coupler(src_grp=this%sim_pg%group,           &
+      dst_grp=this%io_xz_grp, name='hitfiltslicexz'))
+    allocate(this%io_xz_lptcpl, source=lptcoupler(src_grp=this%sim_pg%group,     &
+      dst_grp=this%io_xz_grp, name='hitpartslicexz'))
+    call this%io_xz_cpl%set_src(this%fft_pg)
+    call this%io_xz_lptcpl%set_src(this%ps)
+    if (this%in_io_xz_grp) then
+      call this%io_xz_cpl%set_dst(this%io_xz_cfg)
+      call this%io_xz_lptcpl%set_dst(this%io_xz_lpt)
+    end if
+    call this%io_xz_cpl%initialize()
+    call this%io_xz_lptcpl%initialize()
+    if (this%in_io_xz_grp) then
+      this%io_xz_out = npy(pg=this%io_xz_cfg, folder='hitslicexz')
+      call this%io_xz_out%add_particle('partslice', this%io_xz_pmesh)
+    end if
+
+    ! xy init filter memory
     do n = 1, this%num_filters
       flt => this%filters(n)
-      if (.not. flt%use_slice_io .or. .not. this%in_io_grp) cycle
-      li = this%io_cfg%imino_; hi = this%io_cfg%imaxo_;
-      lj = this%io_cfg%jmino_; hj = this%io_cfg%jmaxo_;
-      lk = this%io_cfg%kmino_; hk = this%io_cfg%kmaxo_;
-      allocate(flt%io_phi(li:hi,lj:hj,lk:hk),                                &
-        flt%io_up(li:hi,lj:hj,lk:hk,3), flt%io_uf(li:hi,lj:hj,lk:hk,3))
-      call this%io_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_phi)
-      vx => flt%io_up(:,:,:,1); vy => flt%io_up(:,:,:,2); vz => flt%io_up(:,:,:,3);
-      call this%io_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
-      vx => flt%io_uf(:,:,:,1); vy => flt%io_uf(:,:,:,2); vz => flt%io_uf(:,:,:,3);
-      call this%io_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
+      if (.not. flt%use_slice_xy_io .or. .not. this%in_io_xy_grp) cycle
+      li = this%io_xy_cfg%imino_; hi = this%io_xy_cfg%imaxo_;
+      lj = this%io_xy_cfg%jmino_; hj = this%io_xy_cfg%jmaxo_;
+      lk = this%io_xy_cfg%kmino_; hk = this%io_xy_cfg%kmaxo_;
+      allocate(flt%io_xy_phi(li:hi,lj:hj,lk:hk),                                &
+        flt%io_xy_up(li:hi,lj:hj,lk:hk,3), flt%io_xy_uf(li:hi,lj:hj,lk:hk,3))
+      call this%io_xy_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_xy_phi)
+      vx => flt%io_xy_up(:,:,:,1); vy => flt%io_xy_up(:,:,:,2); vz => flt%io_xy_up(:,:,:,3);
+      call this%io_xy_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
+      vx => flt%io_xy_uf(:,:,:,1); vy => flt%io_xy_uf(:,:,:,2); vz => flt%io_xy_uf(:,:,:,3);
+      call this%io_xy_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
+    end do
+
+    ! xz init filter memory
+    do n = 1, this%num_filters
+      flt => this%filters(n)
+      if (.not. flt%use_slice_xz_io .or. .not. this%in_io_xz_grp) cycle
+      li = this%io_xz_cfg%imino_; hi = this%io_xz_cfg%imaxo_;
+      lj = this%io_xz_cfg%jmino_; hj = this%io_xz_cfg%jmaxo_;
+      lk = this%io_xz_cfg%kmino_; hk = this%io_xz_cfg%kmaxo_;
+      allocate(flt%io_xz_phi(li:hi,lj:hj,lk:hk),                                &
+        flt%io_xz_up(li:hi,lj:hj,lk:hk,3), flt%io_xz_uf(li:hi,lj:hj,lk:hk,3))
+      call this%io_xz_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_xz_phi)
+      vx => flt%io_xz_up(:,:,:,1); vy => flt%io_xz_up(:,:,:,2); vz => flt%io_xz_up(:,:,:,3);
+      call this%io_xz_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
+      vx => flt%io_xz_uf(:,:,:,1); vy => flt%io_xz_uf(:,:,:,2); vz => flt%io_xz_uf(:,:,:,3);
+      call this%io_xz_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
     end do
 
   end subroutine filterset_setup_sliceio
@@ -772,7 +864,8 @@ contains
     class(filterset), intent(inout) :: this
     real(WP), intent(in) :: t
 
-    if (this%in_io_grp) call this%io_out%write_data(t)
+    if (this%in_io_xy_grp) call this%io_xy_out%write_data(t)
+    if (this%in_io_xz_grp) call this%io_xz_out%write_data(t)
 
   end subroutine filterset_write_sliceio
 
@@ -791,42 +884,81 @@ contains
       this%phi_in_f, this%up_in_f, this%uf_in_f)
 
     do n = 1, this%num_filters
+
       call compute_filter_stats(this%filters(n)%fstats, this%fft,             &
         this%filters(n), step, this%phi_in_f, this%up_in_f, this%uf_in_f,     &
         this%phi, this%phicheck, this%up, this%uf, this%work_r, this%work_c)
-      if (this%filters(n)%use_slice_io) then
+
+      ! xy slice first
+      if (this%filters(n)%use_slice_xy_io) then
         ! transfer continuum properties
-        call this%io_cpl%push(this%phi)
-        call this%io_cpl%transfer()
-        if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_phi)
+        call this%io_xy_cpl%push(this%phi)
+        call this%io_xy_cpl%transfer()
+        if (this%in_io_xy_grp) call this%io_xy_cpl%pull(this%filters(n)%io_xy_phi)
         do m = 1, 3
-          call this%io_cpl%push(this%up(:,:,:,m))
-          call this%io_cpl%transfer()
-          if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_up(:,:,:,m))
-          call this%io_cpl%push(this%uf(:,:,:,m))
-          call this%io_cpl%transfer()
-          if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_uf(:,:,:,m))
+          call this%io_xy_cpl%push(this%up(:,:,:,m))
+          call this%io_xy_cpl%transfer()
+          if (this%in_io_xy_grp) call this%io_xy_cpl%pull(this%filters(n)%io_xy_up(:,:,:,m))
+          call this%io_xy_cpl%push(this%uf(:,:,:,m))
+          call this%io_xy_cpl%transfer()
+          if (this%in_io_xy_grp) call this%io_xy_cpl%pull(this%filters(n)%io_xy_uf(:,:,:,m))
         end do
         ! transfer particle properties to lpt
-        call this%io_lptcpl%push()
-        call this%io_lptcpl%transfer()
-        if (this%in_io_grp) call this%io_lptcpl%pull()
+        call this%io_xy_lptcpl%push()
+        call this%io_xy_lptcpl%transfer()
+        if (this%in_io_xy_grp) call this%io_xy_lptcpl%pull()
         ! transfer particles to pmesh
-        if (this%in_io_grp) then
-          call this%io_pmesh%reset()
-          call this%io_pmesh%set_size(this%io_lpt%np_)
-          do i = 1, this%io_lpt%np_
-            this%io_pmesh%pos(:,i) = this%io_lpt%p(i)%pos
-            this%io_pmesh%var(1,i) = this%io_lpt%p(i)%id
-            this%io_pmesh%var(2,i) = this%io_lpt%p(i)%d
-            this%io_pmesh%vec(:,1,i) = this%io_lpt%p(i)%vel
-            ind = this%ps%cfg%get_ijk_global(this%io_lpt%p(i)%pos)
-            this%io_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
-              pos=this%io_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
+        if (this%in_io_xy_grp) then
+          call this%io_xy_pmesh%reset()
+          call this%io_xy_pmesh%set_size(this%io_xy_lpt%np_)
+          do i = 1, this%io_xy_lpt%np_
+            this%io_xy_pmesh%pos(:,i) = this%io_xy_lpt%p(i)%pos
+            this%io_xy_pmesh%var(1,i) = this%io_xy_lpt%p(i)%id
+            this%io_xy_pmesh%var(2,i) = this%io_xy_lpt%p(i)%d
+            this%io_xy_pmesh%vec(:,1,i) = this%io_xy_lpt%p(i)%vel
+            ind = this%ps%cfg%get_ijk_global(this%io_xy_lpt%p(i)%pos)
+            this%io_xy_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
+              pos=this%io_xy_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
               U=this%U, V=this%V, W=this%W)
           end do
         end if
       end if
+
+      ! xz slice second
+      if (this%filters(n)%use_slice_xz_io) then
+        ! transfer coninuum properties
+        call this%io_xz_cpl%push(this%phi)
+        call this%io_xz_cpl%transfer()
+        if (this%in_io_xz_grp) call this%io_xz_cpl%pull(this%filters(n)%io_xz_phi)
+        do m = 1, 3
+          call this%io_xz_cpl%push(this%up(:,:,:,m))
+          call this%io_xz_cpl%transfer()
+          if (this%in_io_xz_grp) call this%io_xz_cpl%pull(this%filters(n)%io_xz_up(:,:,:,m))
+          call this%io_xz_cpl%push(this%uf(:,:,:,m))
+          call this%io_xz_cpl%transfer()
+          if (this%in_io_xz_grp) call this%io_xz_cpl%pull(this%filters(n)%io_xz_uf(:,:,:,m))
+        end do
+        ! transfer particle properties to lpt
+        call this%io_xz_lptcpl%push()
+        call this%io_xz_lptcpl%transfer()
+        if (this%in_io_xz_grp) call this%io_xz_lptcpl%pull()
+        ! transfer particles to pmesh
+        if (this%in_io_xz_grp) then
+          call this%io_xz_pmesh%reset()
+          call this%io_xz_pmesh%set_size(this%io_xz_lpt%np_)
+          do i = 1, this%io_xz_lpt%np_
+            this%io_xz_pmesh%pos(:,i) = this%io_xz_lpt%p(i)%pos
+            this%io_xz_pmesh%var(1,i) = this%io_xz_lpt%p(i)%id
+            this%io_xz_pmesh%var(2,i) = this%io_xz_lpt%p(i)%d
+            this%io_xz_pmesh%vec(:,1,i) = this%io_xz_lpt%p(i)%vel
+            ind = this%ps%cfg%get_ijk_global(this%io_xz_lpt%p(i)%pos)
+            this%io_xz_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(               &
+              pos=this%io_xz_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),       &
+              U=this%U, V=this%V, W=this%W)
+          end do
+        end if
+      end if
+
     end do
 
   end subroutine filterset_compute_stats
@@ -843,7 +975,8 @@ contains
 
     do n = 1, this%num_filters
       flt => this%filters(n)
-      if (flt%use_slice_io) deallocate(flt%io_phi, flt%io_up, flt%io_uf)
+      if (flt%use_slice_xy_io) deallocate(flt%io_xy_phi, flt%io_xy_up, flt%io_xy_uf)
+      if (flt%use_slice_xz_io) deallocate(flt%io_xz_phi, flt%io_xz_up, flt%io_xz_uf)
     end do
 
   end subroutine filterset_destruct

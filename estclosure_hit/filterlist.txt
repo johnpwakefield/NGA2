@@ -1,5 +1,9 @@
-gaussian01  gaussian    0.1     0.0     0.0     0.0     0.0     0.0
-gaussian02  gaussian    0.2     0.0     0.0     0.0     0.0     0.0
-gaussian03  gaussian    0.3     0.0     0.0     0.0     0.0     0.0
-gaussian04  gaussian    0.4     0.0     0.0     0.0     0.0     0.0
+gaussian02   gaussian    0.02    0.0     0.0     0.0     0.0     0.0
+gaussian04   gaussian    0.04    0.0     0.0     0.0     0.0     0.0
+gaussian08   gaussian    0.08    0.0     0.0     0.0     0.0     0.0
+gaussian10   gaussian    0.10    0.0     0.0     0.0     0.0     0.0
+gaussian16   gaussian    0.16    0.0     0.0     0.0     0.0     0.0
+gaussian24   gaussian    0.24    0.0     0.0     0.0     0.0     0.0
+gaussian32   gaussian    0.32    0.0     0.0     0.0     0.0     0.0
+gaussian40   gaussian    0.40    0.0     0.0     0.0     0.0     0.0
 

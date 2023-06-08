@@ -1,0 +1,56 @@
+# Parallelization
+Partition :	4 8 1
+
+# Mesh definition
+Lx :	1.0
+nx :	256 256 256
+
+# Particle Parameters
+Number of particles :   1200000
+
+# Steady-state (forcing) parameters
+Forcing constant :      42.0
+
+# Parameter sweep
+EC min Relambda : 75.0
+EC max Relambda : 75.0
+EC num Relambda : 3
+EC log Relambda : false
+EC min Stk      : 0.5
+EC max Stk      : 4.0
+EC num Stk      : 8
+EC log Stk      : false
+EC min Wovk     : 0.0
+EC max Wovk     : 3.0
+EC num Wovk     : 3
+EC log Wovk     : false
+EC min vf       : 1e-6
+EC max vf       : 1e-4
+EC num vf       : 3
+EC log vf       : true
+EC num sweeps   : 2
+EC data per statpoint : 4
+
+# data collection parameters
+EC integral timescales :    01.0
+EC new sim multiplier :     12.0
+EC new params multiplier :  02.0
+
+# EC Parameters
+EC FFT mesh       : 512 512 512
+EC filter list    : filterlist.txt
+
+# HS Parameters
+HS write slice    : true
+HS slice thickness proportion : 0.2
+HS slice height proportion    : 0.2
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number    : 0.9
+Max iter          : 9999999
+
+# Ensight output
+Ensight output period : 1.0
+Ensight at intervals  : false
+

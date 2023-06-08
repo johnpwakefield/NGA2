@@ -3,7 +3,7 @@ Partition :	4 8 1
 
 # Mesh definition
 Lx :	1.0
-nx :	128 128 128
+nx :	144 144 144
 
 # Particle Parameters
 Number of particles :   1200000
@@ -12,7 +12,7 @@ Number of particles :   1200000
 Forcing constant :      42.0
 
 # Parameter sweep
-EC min Relambda : 15.0
+EC min Relambda : 35.0
 EC max Relambda : 55.0
 EC num Relambda : 3
 EC log Relambda : false
@@ -24,7 +24,7 @@ EC min Wovk     : 0.0
 EC max Wovk     : 3.0
 EC num Wovk     : 3
 EC log Wovk     : false
-EC min vf       : 1e-8
+EC min vf       : 1e-6
 EC max vf       : 1e-4
 EC num vf       : 3
 EC log vf       : true

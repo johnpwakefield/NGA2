@@ -3,7 +3,7 @@ gaussian04   gaussian    0.04    0.0     0.0     0.0     0.0     0.0
 gaussian08   gaussian    0.08    0.0     0.0     0.0     0.0     0.0
 gaussian10   gaussian    0.10    0.0     0.0     0.0     0.0     0.0
 gaussian16   gaussian    0.16    0.0     0.0     0.0     0.0     0.0
-gaussian20   gaussian    0.20    0.0     0.0     0.0     0.0     0.0
-gaussian30   gaussian    0.30    0.0     0.0     0.0     0.0     0.0
+gaussian24   gaussian    0.24    0.0     0.0     0.0     0.0     0.0
+gaussian32   gaussian    0.32    0.0     0.0     0.0     0.0     0.0
 gaussian40   gaussian    0.40    0.0     0.0     0.0     0.0     0.0
 

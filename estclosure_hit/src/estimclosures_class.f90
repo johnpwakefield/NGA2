@@ -43,7 +43,7 @@ module estimclosures_class
     integer :: step, interval, sweepnum
     real(WP) :: time
     real(WP), dimension(4) :: nondm_actual
-    real(WP), dimension(3) :: dimturb    ! urms, eta, nu
+    real(WP), dimension(2) :: dimturb    ! urms, eta
     character(len=str_medium) :: out_fname
     type(monitor) :: mon
     ! filterset object
@@ -211,7 +211,8 @@ contains
     call ec%mon%add_column(ec%nondm_actual(4), 'act_Wovk'  )
     call ec%mon%add_column(ec%dimturb(1),      'urms')
     call ec%mon%add_column(ec%dimturb(2),      'eta' )
-    call ec%mon%add_column(ec%dimturb(3),      'nu'  )
+    call ec%mon%add_column(ec%param_target(5), 'nu')
+    call ec%mon%add_column(ec%param_target(7), 'g' )
 
   end subroutine ec_monitor_setup
 
@@ -363,16 +364,16 @@ contains
 
   end subroutine ec_io_write
 
-  subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time, step)
+  subroutine compute_statistics(ec, Re_lambda, Stk, phiinf, Wovk, urms, eta, time, step)
     implicit none
     class(estimclosures), intent(inout) :: ec
-    real(WP), intent(in)  :: Re_lambda, Stk, phiinf, Wovk, urms, eta, nu, time
+    real(WP), intent(in)  :: Re_lambda, Stk, phiinf, Wovk, urms, eta, time
     integer, intent(in) :: step
 
     ec%step = step; ec%time = time;
     ec%nondm_actual(:) = (/ Re_lambda, Stk, phiinf, Wovk /)
     ec%nondm_target(:) = ec%nondm_target(:)
-    ec%dimturb(:) = (/ urms, eta, nu /)
+    ec%dimturb(:) = (/ urms, eta /)
     call ec%mon%write()
 
     call ec%hs%compute_stats(step)

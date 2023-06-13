@@ -89,7 +89,7 @@ module npy_class
 contains
 
   function npy_from_args(pg, folder, path, metaname) result(this)
-    use mpi_f08, only: MPI_INTEGER, mpi_gather
+    use mpi_f08, only: MPI_INTEGER, mpi_gather, mpi_barrier
     use messager, only: die
     implicit none
     type(npy) :: this
@@ -111,7 +111,8 @@ contains
     this%meta_fn = trim(this%dir) // trim(meta_actual)
 
     ! make directories if they don't exist
-    call system('mkdir -p ' // trim(this%dir))
+    if (this%pg%amroot) call execute_command_line('mkdir -p ' // trim(this%dir))
+    call mpi_barrier(this%pg%comm, ierr)
 
     ! allocate initial array of times
     this%Nt = 0

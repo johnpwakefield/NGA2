@@ -76,7 +76,7 @@ contains
    !> Constructor for an empty ensight object
    function construct_ensight(cfg,name) result(self)
       use messager, only: die
-      use mpi_f08,  only: MPI_BCAST,MPI_INTEGER
+      use mpi_f08,  only: MPI_BCAST,MPI_INTEGER,mpi_barrier
       use parallel, only: MPI_REAL_WP
       implicit none
       type(ensight) :: self
@@ -100,6 +100,7 @@ contains
          call execute_command_line('mkdir -p ensight')
          call execute_command_line('mkdir -p ensight/'//trim(self%name))
       end if
+      call mpi_barrier(this%cfg%comm, ierr)
 
       ! Write out the geometry
       call self%write_geom(cfg=self%cfg,name='geometry')
@@ -109,7 +110,7 @@ contains
       self%first_vct=>NULL()
       self%first_srf=>NULL()
       self%first_prt=>NULL()
-      
+
       ! Check if a case file exists already - root only
       if (self%cfg%amRoot) then
          inquire(file='ensight/'//trim(self%name)//'/nga.case',exist=file_is_there)
@@ -237,8 +238,8 @@ contains
       ! Also create the corresponding directory
       if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_srf%name))
    end subroutine add_surface
-   
-   
+
+
    !> Add a particle mesh for output
    subroutine add_particle(this,name,particle)
       implicit none
@@ -257,8 +258,8 @@ contains
       ! Also create the corresponding directory
       if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_prt%name))
    end subroutine add_particle
-   
-   
+
+
    !> Output all data in the object
    subroutine write_data(this,time)
       use precision, only: SP
@@ -282,7 +283,7 @@ contains
       type(prt), pointer :: my_prt
       real(SP), dimension(:,:,:), allocatable :: spbuff
       real(WP), dimension(:), allocatable :: temp_time
-      
+
       ! Check provided time stamp and decide what to do
       if (this%ntime.eq.0) then
          ! First time stamp
@@ -300,18 +301,18 @@ contains
          temp_time=[this%time(1:this%ntime-1),time]
          call move_alloc(temp_time,this%time)
       end if
-      
+
       ! Prepare the SP buffer
       allocate(spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_))
-      
+
       ! Traverse all datasets and print them all out - scalars first
       my_scl=>this%first_scl
       do while (associated(my_scl))
-         
+
          ! Create filename
          filename='ensight/'//trim(this%name)//'/'//trim(my_scl%name)//'/'//trim(my_scl%name)//'.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-         
+
          ! Root process starts writing the file header
          if (this%cfg%amRoot) then
             ! Open the file
@@ -328,7 +329,7 @@ contains
             ! Close the file
             close(iunit)
          end if
-         
+
          ! Now parallel-write the actual data (note that we allow both real and integer fields!)
          call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
          if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
@@ -338,20 +339,20 @@ contains
          if (associated(my_scl%iptr)) spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_scl%iptr(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
          call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
          call MPI_FILE_CLOSE(ifile,ierr)
-         
+
          ! Continue on to the next scalar object
          my_scl=>my_scl%next
-         
+
       end do
-      
+
       ! Traverse all datasets and print them all out - vectors second
       my_vct=>this%first_vct
       do while (associated(my_vct))
-         
+
          ! Create filename
          filename='ensight/'//trim(this%name)//'/'//trim(my_vct%name)//'/'//trim(my_vct%name)//'.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-         
+
          ! Root process starts writing the file header
          if (this%cfg%amRoot) then
             ! Open the file
@@ -365,7 +366,7 @@ contains
             ! Close the file
             close(iunit)
          end if
-         
+
          ! Now parallel-write the actual data
          call MPI_FILE_OPEN(this%cfg%comm,trim(filename),IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
          if (ierr.ne.0) call die('[ensight write data] Problem encountered while parallel writing data file '//trim(filename))
@@ -382,18 +383,18 @@ contains
          spbuff(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(my_vct%ptrz(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_),SP)
          call MPI_FILE_WRITE_ALL(ifile,spbuff,this%cfg%nx_*this%cfg%ny_*this%cfg%nz_,MPI_REAL_SP,status,ierr)
          call MPI_FILE_CLOSE(ifile,ierr)
-         
+
          ! Continue on to the next vector object
          my_vct=>my_vct%next
-         
+
       end do
-      
+
       ! Get rid of the SP buffer
       deallocate(spbuff)
-      
+
       ! Finally, re-write the case file
       call this%write_case()
-      
+
       ! Now output all surface meshes
       my_srf=>this%first_srf
       do while (associated(my_srf))
@@ -402,7 +403,7 @@ contains
          ! Continue on to the next surface mesh object
          my_srf=>my_srf%next
       end do
-      
+
       ! Now output all particle meshes
       my_prt=>this%first_prt
       do while (associated(my_prt))
@@ -411,10 +412,10 @@ contains
          ! Continue on to the next surface mesh object
          my_prt=>my_prt%next
       end do
-      
+
    end subroutine write_data
-   
-   
+
+
    !> Case description serial output to a text file
    subroutine write_case(this)
       implicit none
@@ -422,16 +423,16 @@ contains
       integer :: iunit,ierr
       type(scl), pointer :: my_scl
       type(vct), pointer :: my_vct
-      
+
       ! Only the root does this work
       if (.not.this%cfg%amRoot) return
-      
+
       ! Open the case file
       open(newunit=iunit,file='ensight/'//trim(this%name)//'/nga.case',form='formatted',status='replace',access='stream',iostat=ierr)
-      
+
       ! Write all the geometry information
       write(iunit,'(a,/,a,/,/,a,/,a,/)') 'FORMAT','type: ensight gold','GEOMETRY','model: geometry'
-      
+
       ! Write all the variable information
       write(iunit,'(a)') 'VARIABLE'
       write(iunit,'(a)') 'scalar per element: fvf geometry.fvf'
@@ -445,17 +446,17 @@ contains
          write(iunit,'(a)') 'vector per element: 1 '//trim(my_vct%name)//' '//trim(my_vct%name)//'/'//trim(my_vct%name)//'.******'
          my_vct=>my_vct%next
       end do
-      
+
       ! Write the time information
       write(iunit,'(/,a,/,a,/,a,i0,/,a,/,a,/,a)') 'TIME','time set: 1','number of steps: ',this%ntime,'filename start number: 1','filename increment: 1','time values:'
       write(iunit,'(999999(es12.5,/))') this%time
-      
+
       ! Close the case file
       close(iunit)
-      
+
    end subroutine write_case
-   
-   
+
+
    !> Geometry output to a file in parallel
    subroutine write_geom(this,cfg,name)
       use precision, only: SP
@@ -474,21 +475,21 @@ contains
       type(MPI_Status):: status
       integer(kind=MPI_OFFSET_KIND) :: disp
       real(SP), dimension(:,:,:), allocatable :: spbuff
-      
+
       ! Only cfg root does geometry I/O
       if (cfg%amRoot) then
-         
+
          ! First create a new file
          open(newunit=iunit,file='ensight/'//trim(this%name)//'/'//trim(name),form='unformatted',status='replace',access='stream',iostat=ierr)
          if (ierr.ne.0) call die('[ensight write geom] Could not open file: ensight/'//trim(this%name)//'/'//trim(name))
-         
+
          ! General geometry header
          cbuff='C Binary'                          ; write(iunit) cbuff
          cbuff='Ensight Gold Geometry File'        ; write(iunit) cbuff
          cbuff=trim(adjustl(cfg%name))             ; write(iunit) cbuff
          cbuff='node id off'                       ; write(iunit) cbuff
          cbuff='element id off'                    ; write(iunit) cbuff
-         
+
          ! Extents
          cbuff='extents'                           ; write(iunit) cbuff
          rbuff=real(cfg%x(cfg%imin  ),SP)          ; write(iunit) rbuff
@@ -497,28 +498,28 @@ contains
          rbuff=real(cfg%y(cfg%jmax+1),SP)          ; write(iunit) rbuff
          rbuff=real(cfg%z(cfg%kmin  ),SP)          ; write(iunit) rbuff
          rbuff=real(cfg%z(cfg%kmax+1),SP)          ; write(iunit) rbuff
-         
+
          ! Part header
          cbuff='part'                              ; write(iunit) cbuff
          ibuff=1                                   ; write(iunit) ibuff
          cbuff='Complete geometry'                 ; write(iunit) cbuff  ! We have a single grid-cfg here
          cbuff='block rectilinear'                 ; write(iunit) cbuff  ! Not blanked
-         
+
          ! Number of cells
          ibuff=cfg%nx+1                            ; write(iunit) ibuff
          ibuff=cfg%ny+1                            ; write(iunit) ibuff
          ibuff=cfg%nz+1                            ; write(iunit) ibuff
-         
+
          ! Mesh
          write(iunit) real(cfg%x(cfg%imin:cfg%imax+1),SP)
          write(iunit) real(cfg%y(cfg%jmin:cfg%jmax+1),SP)
          write(iunit) real(cfg%z(cfg%kmin:cfg%kmax+1),SP)
-         
+
          ! Close the file
          close(iunit)
-         
+
       end if
-      
+
       ! Root process starts writing the file header for VF data
       if (cfg%amRoot) then
          ! Open the file
@@ -532,10 +533,10 @@ contains
          ! Close the file
          close(iunit)
       end if
-      
+
       ! Prepare the SP buffer
       allocate(spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_))
-      
+
       ! Now parallel-write the VF data
       call MPI_FILE_OPEN(cfg%comm,'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf',IOR(MPI_MODE_WRONLY,MPI_MODE_APPEND),info_mpiio,ifile,ierr)
       if (ierr.ne.0) call die('[ensight write geom] Problem encountered while parallel writing fvf data file: '//'ensight/'//trim(this%name)//'/'//trim(name)//'.fvf')
@@ -544,13 +545,13 @@ contains
       spbuff(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_)=real(cfg%VF(cfg%imin_:cfg%imax_,cfg%jmin_:cfg%jmax_,cfg%kmin_:cfg%kmax_),SP)
       call MPI_FILE_WRITE_ALL(ifile,spbuff,cfg%nx_*cfg%ny_*cfg%nz_,MPI_REAL_SP,status,ierr)
       call MPI_FILE_CLOSE(ifile,ierr)
-      
+
       ! Deallocate SP buffer
       deallocate(spbuff)
-      
+
    end subroutine write_geom
-   
-   
+
+
    !> Procedure that writes out a surface mesh in Ensight format
    subroutine write_surf(this,surf)
       use precision, only: SP
@@ -564,7 +565,7 @@ contains
       character(len=80) :: cbuff
       real(SP) :: rbuff
       integer :: ibuff
-      
+
       ! Write the case file from scratch in ASCII format
       if (this%cfg%amRoot) then
          ! Open the case file
@@ -582,11 +583,11 @@ contains
          ! Close the case file
          close(iunit)
       end if
-      
+
       ! Generate the surface geometry filename
       filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%name)//'.'
       write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
-      
+
       ! Write the file header for Ensight Gold unstructured geometry
       if (this%cfg%amRoot) then
          ! Open the file
@@ -609,7 +610,7 @@ contains
          ! Close the file
          close(iunit)
       end if
-      
+
       ! Write polygonal mesh in Ensight Gold 'nsided' format
       do rank=0,this%cfg%nproc-1
          if (rank.eq.this%cfg%rank) then
@@ -642,7 +643,7 @@ contains
          ! Force synchronization
          call MPI_BARRIER(this%cfg%comm,ierr)
       end do
-      
+
       ! Generate the additional variable files
       do n=1,surf%ptr%nvar
          filename='ensight/'//trim(this%name)//'/'//trim(surf%name)//'/'//trim(surf%ptr%varname(n))//'.'
@@ -678,10 +679,10 @@ contains
             call MPI_BARRIER(this%cfg%comm,ierr)
          end do
       end do
-      
+
    end subroutine write_surf
-   
-   
+
+
    !> Procedure that writes out a particle mesh in Ensight format
    subroutine write_part(this,part)
       use precision, only: SP
@@ -694,7 +695,7 @@ contains
       integer :: iunit,ierr,rank,n
       character(len=80) :: cbuff
       integer :: ibuff,npart
-      
+
       ! Write the case file from scratch in ASCII format
       if (this%cfg%amRoot) then
          ! Open the case file
@@ -716,7 +717,7 @@ contains
          ! Close the case file
          close(iunit)
       end if
-      
+
       ! Generate the particle geometry file
       filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/particle.'
       write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
@@ -750,7 +751,7 @@ contains
          ! Force synchronization
          call MPI_BARRIER(this%cfg%comm,ierr)
       end do
-      
+
       ! Generate the particle scalar files
       do n=1,part%ptr%nvar
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.'
@@ -780,7 +781,7 @@ contains
             call MPI_BARRIER(this%cfg%comm,ierr)
          end do
       end do
-      
+
       ! Generate the particle vector files
       do n=1,part%ptr%nvec
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.'
@@ -810,7 +811,7 @@ contains
             call MPI_BARRIER(this%cfg%comm,ierr)
          end do
       end do
-      
+
    end subroutine write_part
 
 
@@ -836,7 +837,7 @@ contains
       allocate(npart_proc(this%cfg%nproc))
       call MPI_ALLGATHER(part%ptr%n,1,MPI_INTEGER,npart_proc,1,MPI_INTEGER,this%cfg%comm,ierr)
       npart=sum(npart_proc)
-      
+
       ! Write the case file from scratch in ASCII format
       if (this%cfg%amRoot) then
          ! Open the case file
@@ -892,7 +893,7 @@ contains
          deallocate(p_int)
       end if
       call MPI_FILE_CLOSE(ifile,ierr)
-      
+
       ! Generate the particle scalar files
       do n=1,part%ptr%nvar
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.'
@@ -916,7 +917,7 @@ contains
          end if
          call MPI_FILE_CLOSE(ifile,ierr)
       end do
-      
+
       ! Generate the particle vector files
       do n=1,part%ptr%nvec
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.'
@@ -943,8 +944,8 @@ contains
 
       ! Clean up
       deallocate(npart_proc)
-      
+
    end subroutine write_part_parallel
-   
-   
+
+
 end module ensight_class

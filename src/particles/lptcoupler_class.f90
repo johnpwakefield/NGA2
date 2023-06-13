@@ -289,7 +289,6 @@ contains
     this%recvbufsize = 0; allocate(this%recvbuf(this%recvbufsize));
 
     this%initialized = .true.
-    if (this%urank .eq. 0) write(*,*) '[lptcoupler] initialized'
 
   end subroutine initialize
 

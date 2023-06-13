@@ -51,6 +51,6 @@ Max cfl number    : 0.9
 Max iter          : 9999999
 
 # Ensight output
-Ensight output period : 1.0
+Ensight output period : 80.0
 Ensight at intervals  : false
 

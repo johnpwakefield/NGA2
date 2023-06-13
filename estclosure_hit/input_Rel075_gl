@@ -1,12 +1,12 @@
 # Parallelization
-Partition :	4 8 1
+Partition :	6 6 1
 
 # Mesh definition
 Lx :	1.0
 nx :	256 256 256
 
 # Particle Parameters
-Number of particles :   1200000
+Number of particles :   2400000
 
 # Steady-state (forcing) parameters
 Forcing constant :      42.0
@@ -51,6 +51,6 @@ Max cfl number    : 0.9
 Max iter          : 9999999
 
 # Ensight output
-Ensight output period : 1.0
+Ensight output period : 80.0
 Ensight at intervals  : false
 

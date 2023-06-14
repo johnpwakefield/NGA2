@@ -417,8 +417,12 @@ contains
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('pressure',fs%P)
       call ens_out%add_particle('particles',pmesh)
-      ! Set up output for filtered quantities
+      ! Set up ensight output for filtered quantities
       call ec%io_setup()
+      call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, eta, time%t, time%n)
+      call ec%io_write(time%t)
+      ! Output to ensight
+      if (.not. ens_at_ints .and. ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
 
     ! Create a monitor file
@@ -512,16 +516,6 @@ contains
       call tfile%add_column(wt_rest%percent,'Rest [%]')
       call tfile%write()
     end block create_monitor
-
-    ! allocate filter memory
-    call ec%alloc()
-
-    ! write zero time statistics
-    call ec%compute_statistics(Re_lambda, Stk, phiinf, Wovk, urms, eta, time%t, time%n)
-    call ec%io_write(time%t)
-
-    ! Output initial ensight
-    if (.not. ens_at_ints .and. ens_evt%occurs()) call ens_out%write_data(time%t)
 
   end subroutine simulation_init
 

@@ -111,7 +111,6 @@ module hitstats
     type(partmesh) :: io_xy_pmesh, io_xz_pmesh
   contains
     procedure :: init => filterset_init
-    procedure :: init_filters => filterset_init_filters
     procedure :: setup_sliceio => filterset_setup_sliceio
     procedure :: write_sliceio => filterset_write_sliceio
     procedure :: compute_stats => filterset_compute_stats
@@ -649,23 +648,18 @@ contains
         sim_pg%comm, ierr)
       call mpi_bcast(this%filters(i)%use_slice_xz_io, 1, MPI_LOGICAL, 0,      &
         sim_pg%comm, ierr)
+      call this%filters(i)%init(this%fft)
     end do
 
     ! set all processes to not be io processes until it's set up
     this%in_io_xy_grp = .false.; this%in_io_xz_grp = .false.;
 
+    ! announce success
+    if (sim_pg%rank .eq. 0) then
+      write(*,'(a,i0,a)') " [EC] initialized ", this%num_filters, " filters"
+    end if
+
   end subroutine filterset_init
-
-  subroutine filterset_init_filters(this)
-    implicit none
-    class(filterset), intent(inout) :: this
-    integer :: i
-
-    do i = 1, this%num_filters
-      call this%filters(i)%init(this%fft)
-    end do
-
-  end subroutine filterset_init_filters
 
   subroutine filterset_setup_sliceio(this)
     use mpi_f08    !,  only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR,           &

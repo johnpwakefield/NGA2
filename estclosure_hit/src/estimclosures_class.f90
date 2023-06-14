@@ -58,6 +58,7 @@ module estimclosures_class
   contains
     procedure :: construct => ec_construct  ! constructors of abstract classes in fortran are wonky
     procedure :: init => ec_init            ! parent initializer
+    procedure :: alloc => ec_alloc          ! allocate the filter memory (must be done after forking calls)
     ! commented because I'm too lazy to write an interface block
     !procedure, deferred :: get_next_params
     !procedure, deferred :: get_interval
@@ -128,6 +129,14 @@ contains
     call ec%hs%init(ec%sim_pg, filterfile, FFTN, rhof_array, visc, U, V, W, sx, sy, sz, ps)
 
   end subroutine ec_init
+
+  subroutine ec_alloc(ec)
+    implicit none
+    class(estimclosures), intent(inout) :: ec
+
+    call ec%hs%init_filters()
+
+  end subroutine ec_alloc
 
   function ecmesh_from_args(cfg) result(ec)
     use messager, only: die

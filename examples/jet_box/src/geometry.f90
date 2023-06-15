@@ -1,14 +1,15 @@
 !> Various definitions and tools for initializing NGA2 config
 module geometry
-   use ibconfig_class, only: ibconfig
-   use precision,      only: WP
+   use config_class, only: config
+   use precision,    only: WP
    implicit none
    private
    
    !> Single config
-   type(ibconfig), public :: cfg
+   type(config), public :: cfg
    
-   real(WP), public :: Rcyl
+   !> Wall height
+   real(WP), public :: wheight
 
    public :: geometry_init
    
@@ -37,17 +38,17 @@ contains
          
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.25_WP*Lx
+            x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.5_WP*Lx
          end do
          do j=1,ny+1
-            y(j)=real(j-1,WP)/real(ny,WP)*Ly-0.5_WP*Ly
+            y(j)=real(j-1,WP)/real(ny,WP)*Ly
          end do
          do k=1,nz+1
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='cylinder')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jetBox')
          
       end block create_grid
       
@@ -59,29 +60,29 @@ contains
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid
-         cfg=ibconfig(grp=group,decomp=partition,grid=grid)
+         cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_cfg
       
       
-      ! Create IB walls for this config
+      ! Create masks for this config
       create_walls: block
-         use mathtools,      only: twoPi
-         use ibconfig_class, only: bigot,sharp
          integer :: i,j,k
-         ! Read in cylinder radius
-         call param_read('Cylinder radius',Rcyl)
-         ! Create IB field
+         ! Read in wall height
+         call param_read('Box height',wheight)
+         ! Setup the wall
+         cfg%VF=1.0_WP
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  cfg%Gib(i,j,k)=sqrt(cfg%xm(i)**2+cfg%ym(j)**2)-Rcyl
+                  ! Side walls
+                  if (cfg%ym(j).lt.wheight.and.cfg%ym(j).gt.0.0_WP) then
+                     if (abs(cfg%xm(i)).gt.0.5_WP*cfg%xL.or.abs(cfg%zm(k)).gt.0.5_WP*cfg%zL) cfg%VF(i,j,k)=0.0_WP
+                  end if
+                  ! Bottom wall
+                  if (cfg%ym(j).lt.0.0_WP) cfg%VF(i,j,k)=0.0_WP
                end do
             end do
          end do
-         ! Get normal vector
-         call cfg%calculate_normal()
-         ! Get VF field
-         call cfg%calculate_vf(method=sharp,allow_zero_vf=.false.)
       end block create_walls
       
       

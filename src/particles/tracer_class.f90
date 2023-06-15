@@ -27,6 +27,7 @@ module tracer_class
      !> MPI_DOUBLE_PRECISION data
      real(WP), dimension(3) :: pos        !< Particle center coordinates
      real(WP), dimension(3) :: vel        !< Velocity of particle
+     real(WP), dimension(3) :: acc        !< Acceleration of particle
      real(WP) :: rho                      !< Density at particle location
      real(WP) :: P                        !< Pressure at particle locatiom
      !> MPI_INTEGER data
@@ -35,7 +36,7 @@ module tracer_class
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[1,8,4]
+  integer           , dimension(part_nblock) :: part_lblock=[1,11,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
@@ -161,6 +162,8 @@ contains
        ! Correct with midpoint rule
        this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
        this%p(i)%pos=this%p(i)%pos+dt*this%p(i)%vel
+       ! Update acceleration
+       this%p(i)%acc=(this%p(i)%vel-pold%vel)/dt
        ! Correct the position to take into account periodicity
        if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
        if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)

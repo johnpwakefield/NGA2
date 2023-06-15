@@ -100,7 +100,7 @@ contains
          call execute_command_line('mkdir -p ensight')
          call execute_command_line('mkdir -p ensight/'//trim(self%name))
       end if
-      call mpi_barrier(this%cfg%comm, ierr)
+      call mpi_barrier(self%cfg%comm, ierr)
 
       ! Write out the geometry
       call self%write_geom(cfg=self%cfg,name='geometry')

@@ -21,9 +21,14 @@ module tpns_class
    integer, parameter, public :: neumann=3           !< Zero normal gradient
    integer, parameter, public :: convective=4        !< Convective outflow condition
    integer, parameter, public :: clipped_neumann=5   !< Clipped Neumann condition (outflow only)
-   
+   integer, parameter, public :: slip=6              !< Free-slip condition
+
    ! List of available contact line models for this solver
    integer, parameter, public :: static_contact=1    !< Static contact line model
+   
+   ! List of available averaging strategies for viscosity
+   integer, parameter, public :: harmonic_visc=1     !< Harmonically-averaged viscosity
+   integer, parameter, public :: arithmetic_visc=2   !< Arithmetically-averaged viscosity
    
    ! Parameter for switching schemes around the interface
    real(WP), parameter :: rhoeps_coeff=1.0e-3_WP     !< Parameter for deciding when to switch to upwinded transport
@@ -838,7 +843,8 @@ contains
       class(tpns), intent(inout) :: this
       class(linsol), target, intent(in) :: pressure_solver                      !< A pressure solver is required
       class(linsol), target, intent(in), optional :: implicit_solver            !< An implicit solver can be provided
-      
+      integer :: i,j,k
+
       ! Adjust metrics based on bcflag array
       call this%adjust_metrics()
 
@@ -854,11 +860,33 @@ contains
       this%psolv%stc(6,:)=[ 0, 0,+1]
       this%psolv%stc(7,:)=[ 0, 0,-1]
       
-      ! Set the diagonal to VF to make sure all needed cells participate in solver
-      this%psolv%opr(1,:,:,:)=this%cfg%VF
+      ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(grad(*))
+      ! Expectations is that this will be replaced later to lap(*)=-vol*div(grad(*)/rho)
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               ! Set Laplacian
+               this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)+&
+               &                       this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)+&
+               &                       this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)+&
+               &                       this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)+&
+               &                       this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)+&
+               &                       this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )
+               this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)
+               this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)
+               this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)
+               this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)
+               this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)
+               this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )
+               ! Scale it by the cell volume
+               this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
       
       ! Initialize the pressure Poisson solver
       call this%psolv%init()
+      call this%psolv%setup()
       
       ! Prepare implicit solver if it had been provided
       if (present(implicit_solver)) then
@@ -931,7 +959,7 @@ contains
       
       ! Now adjust the metrics accordingly
       select case (new_bc%type)
-      case (dirichlet) !< Dirichlet is set one face (i.e., velocit component) at the time
+      case (dirichlet) !< Dirichlet is set one face (i.e., velocity component) at the time
          select case (new_bc%face)
          case ('x')
             do n=1,new_bc%itr%n_
@@ -953,6 +981,7 @@ contains
       case (neumann) !< Neumann has to be at existing wall or at domain boundary!
       case (clipped_neumann)
       case (convective)
+      case (slip)
       case default
          call die('[tpns apply_bcond] Unknown bcond type')
       end select
@@ -1015,7 +1044,7 @@ contains
                ! This is done by the user directly
                ! Unclear whether we want to do this within the solver...
                
-            case (neumann,clipped_neumann) !< Apply Neumann condition to all 3 components
+            case (neumann,clipped_neumann,slip) !< Apply Neumann condition to all 3 components
                ! Handle index shift due to staggering
                stag=min(my_bc%dir,0)
                ! Implement based on bcond direction
@@ -1062,6 +1091,26 @@ contains
                      do n=1,my_bc%itr%n_
                         i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
                         if (this%W(i,j,k)*my_bc%rdir.lt.0.0_WP) this%W(i,j,k)=0.0_WP
+                     end do
+                  end select
+               end if
+               ! If needed, no penetration
+               if (my_bc%type.eq.slip) then
+                  select case (my_bc%face)
+                  case ('x')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        this%U(i,j,k)=0.0_WP
+                     end do
+                  case ('y')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        this%V(i,j,k)=0.0_WP
+                     end do
+                  case ('z')
+                     do n=1,my_bc%itr%n_
+                        i=my_bc%itr%map(1,n); j=my_bc%itr%map(2,n); k=my_bc%itr%map(3,n)
+                        this%W(i,j,k)=0.0_WP
                      end do
                   end select
                end if
@@ -1561,11 +1610,12 @@ contains
    end subroutine get_dmomdt
    
    
-   !> Update pressure Poisson operator
-   subroutine update_laplacian(this)
+   !> Update pressure Poisson operator - option is given to pin a point
+   subroutine update_laplacian(this,pinpoint)
       implicit none
       class(tpns), intent(inout) :: this
       integer :: i,j,k
+      integer, dimension(3), optional :: pinpoint
       ! Setup the scaled Laplacian operator from  metrics: lap(*)=-vol.div(grad(*)/rho)
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
@@ -1588,6 +1638,15 @@ contains
             end do
          end do
       end do
+      ! Pin one point
+      if (present(pinpoint)) then
+         if (pinpoint(1).ge.this%cfg%imin_.and.pinpoint(1).le.this%cfg%imax_.and.&
+         &   pinpoint(2).ge.this%cfg%jmin_.and.pinpoint(2).le.this%cfg%jmax_.and.&
+         &   pinpoint(3).ge.this%cfg%kmin_.and.pinpoint(3).le.this%cfg%kmax_) then
+            this%psolv%opr(:,pinpoint(1),pinpoint(2),pinpoint(3))=0.0_WP
+            this%psolv%opr(1,pinpoint(1),pinpoint(2),pinpoint(3))=1.0_WP
+         end if
+      end if
       ! Initialize the pressure Poisson solver
       call this%psolv%setup()
    end subroutine update_laplacian
@@ -1641,7 +1700,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))!*2.0_WP*this%rho_U(i,j,k)/(this%rho_l+this%rho_g)
+               this%Pjx(i,j,k)=this%sigma*mycurv*sum(this%divu_x(:,i,j,k)*vf%VF(i-1:i,j,k))
                ! Y face
                mysurf=sum(vf%SD(i,j-1:j,k)*this%cfg%vol(i,j-1:j,k))
                if (mysurf.gt.0.0_WP) then
@@ -1649,7 +1708,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))!*2.0_WP*this%rho_V(i,j,k)/(this%rho_l+this%rho_g)
+               this%Pjy(i,j,k)=this%sigma*mycurv*sum(this%divv_y(:,i,j,k)*vf%VF(i,j-1:j,k))
                ! Z face
                mysurf=sum(vf%SD(i,j,k-1:k)*this%cfg%vol(i,j,k-1:k))
                if (mysurf.gt.0.0_WP) then
@@ -1657,7 +1716,7 @@ contains
                else
                   mycurv=0.0_WP
                end if
-               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))!*2.0_WP*this%rho_W(i,j,k)/(this%rho_l+this%rho_g)
+               this%Pjz(i,j,k)=this%sigma*mycurv*sum(this%divw_z(:,i,j,k)*vf%VF(i,j,k-1:k))
             end do
          end do
       end do
@@ -2544,44 +2603,90 @@ contains
    
    
    !> Prepare viscosity arrays from vfs object
-   subroutine get_viscosity(this,vf)
+   subroutine get_viscosity(this,vf,strat)
       use vfs_class, only: vfs
+      use messager,  only: die
       implicit none
       class(tpns), intent(inout) :: this
       class(vfs), intent(in) :: vf
-      integer :: i,j,k
+      integer :: i,j,k,mystrat
       real(WP) :: liq_vol,gas_vol,tot_vol
-      ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
-      do k=this%cfg%kmino_+1,this%cfg%kmaxo_
-         do j=this%cfg%jmino_+1,this%cfg%jmaxo_
-            do i=this%cfg%imino_+1,this%cfg%imaxo_
-               ! VISC at [xm,ym,zm] - direct sum in x/y/z
-               liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
-               gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
-               tot_vol=gas_vol+liq_vol
-               this%visc(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-               ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
-               liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
-               gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
-               tot_vol=gas_vol+liq_vol
-               this%visc_xy(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-               ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
-               liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
-               gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
-               tot_vol=gas_vol+liq_vol
-               this%visc_yz(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
-               ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
-               liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
-               gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
-               tot_vol=gas_vol+liq_vol
-               this%visc_zx(i,j,k)=0.0_WP
-               if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+      integer, optional :: strat
+      ! Choose viscosity averaging strategy
+      if (present(strat)) then
+         mystrat=strat
+      else
+         mystrat=harmonic_visc
+      end if
+      ! Check what strategy should be used
+      select case (mystrat)
+      case (harmonic_visc)
+         ! Compute harmonically-averaged staggered viscosities using subcell phasic volumes
+         do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+            do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+               do i=this%cfg%imino_+1,this%cfg%imaxo_
+                  ! VISC at [xm,ym,zm] - direct sum in x/y/z
+                  liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+                  gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+                  ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+                  liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
+                  gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_xy(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+                  ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+                  liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
+                  gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_yz(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+                  ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+                  liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
+                  gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_zx(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=this%visc_g*this%visc_l/(this%visc_l*gas_vol/tot_vol+this%visc_g*liq_vol/tot_vol+epsilon(1.0_WP))
+               end do
             end do
          end do
-      end do
+      case (arithmetic_visc)
+         ! Compute arithmetically-averaged staggered viscosities using subcell phasic volumes
+         do k=this%cfg%kmino_+1,this%cfg%kmaxo_
+            do j=this%cfg%jmino_+1,this%cfg%jmaxo_
+               do i=this%cfg%imino_+1,this%cfg%imaxo_
+                  ! VISC at [xm,ym,zm] - direct sum in x/y/z
+                  liq_vol=sum(vf%Lvol(:,:,:,i,j,k))
+                  gas_vol=sum(vf%Gvol(:,:,:,i,j,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+                  ! VISC_xy at [x,y,zm] - direct sum in z, staggered sum in x/y
+                  liq_vol=sum(vf%Lvol(0,0,:,i,j,k))+sum(vf%Lvol(1,0,:,i-1,j,k))+sum(vf%Lvol(0,1,:,i,j-1,k))+sum(vf%Lvol(1,1,:,i-1,j-1,k))
+                  gas_vol=sum(vf%Gvol(0,0,:,i,j,k))+sum(vf%Gvol(1,0,:,i-1,j,k))+sum(vf%Gvol(0,1,:,i,j-1,k))+sum(vf%Gvol(1,1,:,i-1,j-1,k))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_xy(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_xy(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+                  ! VISC_yz at [xm,y,z] - direct sum in x, staggered sum in y/z
+                  liq_vol=sum(vf%Lvol(:,0,0,i,j,k))+sum(vf%Lvol(:,1,0,i,j-1,k))+sum(vf%Lvol(:,0,1,i,j,k-1))+sum(vf%Lvol(:,1,1,i,j-1,k-1))
+                  gas_vol=sum(vf%Gvol(:,0,0,i,j,k))+sum(vf%Gvol(:,1,0,i,j-1,k))+sum(vf%Gvol(:,0,1,i,j,k-1))+sum(vf%Gvol(:,1,1,i,j-1,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_yz(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_yz(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+                  ! VISC_zx at [x,ym,z] - direct sum in y, staggered sum in z/x
+                  liq_vol=sum(vf%Lvol(0,:,0,i,j,k))+sum(vf%Lvol(0,:,1,i,j,k-1))+sum(vf%Lvol(1,:,0,i-1,j,k))+sum(vf%Lvol(1,:,1,i-1,j,k-1))
+                  gas_vol=sum(vf%Gvol(0,:,0,i,j,k))+sum(vf%Gvol(0,:,1,i,j,k-1))+sum(vf%Gvol(1,:,0,i-1,j,k))+sum(vf%Gvol(1,:,1,i-1,j,k-1))
+                  tot_vol=gas_vol+liq_vol
+                  this%visc_zx(i,j,k)=0.0_WP
+                  if (tot_vol.gt.0.0_WP) this%visc_zx(i,j,k)=(this%visc_l*liq_vol+this%visc_g*gas_vol)/tot_vol
+               end do
+            end do
+         end do
+      case default
+         call die('[tpns get_viscosity] Unknown viscosity averaging strategy')
+      end select
       ! Synchronize boundaries - not really needed...
       call this%cfg%sync(this%visc)
       call this%cfg%sync(this%visc_xy)

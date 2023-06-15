@@ -590,23 +590,23 @@ contains
             call fs%cfg%sync(resW)
           end block add_lpt_src
 
-          ! Apply IB forcing to enforce BC at the pipe walls
-          ibm_correction: block
-            integer :: i,j,k
-            real(WP) :: VFx,VFy,VFz
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     VFx=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
-                     VFy=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))
-                     VFz=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))
-                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*fs%rhoU(i,j,k)
-                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*fs%rhoV(i,j,k)
-                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*fs%rhoW(i,j,k)
-                  end do
-               end do
-            end do
-          end block ibm_correction
+!!$          ! Apply IB forcing to enforce BC at the pipe walls
+!!$          ibm_correction: block
+!!$            integer :: i,j,k
+!!$            real(WP) :: VFx,VFy,VFz
+!!$            do k=fs%cfg%kmin_,fs%cfg%kmax_
+!!$               do j=fs%cfg%jmin_,fs%cfg%jmax_
+!!$                  do i=fs%cfg%imin_,fs%cfg%imax_
+!!$                     VFx=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
+!!$                     VFy=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))
+!!$                     VFz=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))
+!!$                     resU(i,j,k)=resU(i,j,k)-(1.0_WP-VFx)*fs%rhoU(i,j,k)
+!!$                     resV(i,j,k)=resV(i,j,k)-(1.0_WP-VFy)*fs%rhoV(i,j,k)
+!!$                     resW(i,j,k)=resW(i,j,k)-(1.0_WP-VFz)*fs%rhoW(i,j,k)
+!!$                  end do
+!!$               end do
+!!$            end do
+!!$          end block ibm_correction
 
           ! Add body forcing
           bodyforcing: block
@@ -623,22 +623,22 @@ contains
           fs%V=2.0_WP*fs%V-fs%Vold+resV
           fs%W=2.0_WP*fs%W-fs%Wold+resW
 
-!!$          ! Apply IB forcing to enforce BC at the pipe walls
-!!$          ibforcing: block
-!!$            integer :: i,j,k
-!!$            do k=fs%cfg%kmin_,fs%cfg%kmax_
-!!$               do j=fs%cfg%jmin_,fs%cfg%jmax_
-!!$                  do i=fs%cfg%imin_,fs%cfg%imax_
-!!$                     fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
-!!$                     fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
-!!$                     fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
-!!$                  end do
-!!$               end do
-!!$            end do
-!!$            call fs%cfg%sync(fs%U)
-!!$            call fs%cfg%sync(fs%V)
-!!$            call fs%cfg%sync(fs%W)
-!!$          end block ibforcing
+          ! Apply IB forcing to enforce BC at the pipe walls
+          ibforcing: block
+            integer :: i,j,k
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
+                     fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
+                     fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
+                  end do
+               end do
+            end do
+            call fs%cfg%sync(fs%U)
+            call fs%cfg%sync(fs%V)
+            call fs%cfg%sync(fs%W)
+          end block ibforcing
 
           ! Apply other boundary conditions and update momentum
           call fs%apply_bcond(time%tmid,time%dtmid)
@@ -658,6 +658,7 @@ contains
 
           ! Correct momentum and rebuild velocity
           call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+          if (modulo(time%n,1000).eq.0) fs%P=0.0_WP
           fs%P=fs%P+fs%psolv%sol
           fs%rhoU=fs%rhoU-time%dtmid*resU
           fs%rhoV=fs%rhoV-time%dtmid*resV

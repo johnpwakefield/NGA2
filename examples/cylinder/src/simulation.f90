@@ -191,6 +191,9 @@ contains
                end do
             end do
          end do
+         if (fs%cfg%nx.eq.1) fs%U=0.0_WP
+         if (fs%cfg%ny.eq.1) fs%V=0.0_WP
+         if (fs%cfg%nz.eq.1) fs%W=0.0_WP
          call fs%cfg%sync(fs%U)
          call fs%cfg%sync(fs%V)
          call fs%cfg%sync(fs%W)
@@ -232,15 +235,17 @@ contains
        ! Create partmesh object for particle tracking output
        create_pmesh: block
          integer :: i
-         pmesh=partmesh(nvar=2,nvec=1,name='tracers')
+         pmesh=partmesh(nvar=2,nvec=2,name='tracers')
          pmesh%varname(1)='density'
          pmesh%varname(2)='pressure'
          pmesh%vecname(1)='velocity'
+         pmesh%vecname(2)='acceleration'
          call pt%update_partmesh(pmesh)
          do i=1,pt%np_
             pmesh%var(1,i)=pt%p(i)%rho
             pmesh%var(2,i)=pt%p(i)%P
             pmesh%vec(:,1,i)=pt%p(i)%vel
+            pmesh%vec(:,2,i)=pt%p(i)%acc
          end do
        end block create_pmesh
       
@@ -389,6 +394,7 @@ contains
                  pmesh%var(1,i)=pt%p(i)%rho
                  pmesh%var(2,i)=pt%p(i)%P
                  pmesh%vec(:,1,i)=pt%p(i)%vel
+                 pmesh%vec(:,2,i)=pt%p(i)%acc
               end do
             end block update_pmesh
             call ens_out%write_data(time%t)

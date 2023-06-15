@@ -207,6 +207,8 @@ contains
          call lp%resize(np)
          ! Distribute particles
          do i=1,np
+            ! Set the diameter
+            lp%p(i)%d=dp
             ! Give position (avoid overlap)
             overlap=.true.
             do while(overlap)
@@ -225,8 +227,6 @@ contains
             !print *, real(i,WP)/real(np,WP)*100.0_WP,'%'
             ! Give id
             lp%p(i)%id=int(i,8)
-            ! Set the diameter
-            lp%p(i)%d=dp
             ! Set the temperature
             lp%p(i)%T=298.15_WP
             ! Give zero velocity

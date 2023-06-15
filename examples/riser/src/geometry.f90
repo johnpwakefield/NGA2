@@ -39,7 +39,7 @@ contains
       call param_read('nz',nz); allocate(z(nz+1))
 
       dx=Lx/real(nx,WP)
-      no=6
+      no=4
       if (ny.gt.1) then
          Ly=D+real(2*no,WP)*D/real(ny-2*no,WP)
       else

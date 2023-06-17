@@ -62,6 +62,7 @@ module npy_class
 
     character(len=str_medium) :: meta_fn
     character(len=str_medium) :: dir
+    logical :: mkdirs
 
     integer, dimension(:,:), allocatable :: blkbds
 
@@ -88,7 +89,7 @@ module npy_class
 
 contains
 
-  function npy_from_args(pg, folder, path, metaname) result(this)
+  function npy_from_args(pg, folder, path, metaname, skipmkdirs) result(this)
     use mpi_f08, only: MPI_INTEGER, mpi_gather, mpi_barrier
     use messager, only: die
     implicit none
@@ -96,6 +97,7 @@ contains
     class(pgrid), intent(in), target :: pg
     character(len=*), intent(in) :: folder
     character(len=str_medium), intent(in), optional :: path, metaname
+    logical, intent(in), optional :: skipmkdirs
     character(len=str_medium) :: path_actual, meta_actual
     integer :: ierr
 
@@ -103,6 +105,8 @@ contains
     this%pg => pg
 
     ! set directories
+    this%mkdirs = .true.
+    if (present(skipmkdirs)) this%mkdirs = .not. skipmkdirs
     path_actual = DEFAULT_PATH
     if (present(path)) path_actual = trim(path)
     this%dir = trim(path_actual) // SLASH // trim(folder) // SLASH
@@ -111,7 +115,7 @@ contains
     this%meta_fn = trim(this%dir) // trim(meta_actual)
 
     ! make directories if they don't exist
-    if (this%pg%amroot) call execute_command_line('mkdir -p ' // trim(this%dir))
+    if (this%pg%amroot .and. this%mkdirs) call execute_command_line('mkdir -p ' // trim(this%dir))
     call mpi_barrier(this%pg%comm, ierr)
 
     ! allocate initial array of times

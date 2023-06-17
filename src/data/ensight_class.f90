@@ -42,6 +42,9 @@ module ensight_class
    type :: ensight
       ! An ensight object has a name
       character(len=str_medium) :: name                               !< Name of ensight directory to read/write
+      ! We might want to pre-create directories because of memory issues,
+      ! setting this flag to .false. will skip the directory creation
+      logical :: mkdirs
       ! An ensight object stores time values
       integer :: ntime                                                !< Number of scalar values
       real(WP), dimension(:), allocatable :: time                     !< Time values
@@ -74,7 +77,7 @@ module ensight_class
 contains
 
    !> Constructor for an empty ensight object
-   function construct_ensight(cfg,name) result(self)
+   function construct_ensight(cfg,name,skipmkdir) result(self)
       use messager, only: die
       use mpi_f08,  only: MPI_BCAST,MPI_INTEGER,mpi_barrier
       use parallel, only: MPI_REAL_WP
@@ -82,6 +85,7 @@ contains
       type(ensight) :: self
       class(config), target, intent(in) :: cfg
       character(len=*), intent(in) :: name
+      logical, optional, intent(in) :: skipmkdir
       character(len=str_medium) :: line
       integer :: iunit,ierr,stat
       logical :: file_is_there,found
@@ -95,8 +99,12 @@ contains
       ! Start with no time stamps
       self%ntime=0
 
+      ! Decide whether to make directories
+      self%mkdirs = .true.
+      if (present(skipmkdir)) self%mkdirs = .not. skipmkdir
+
       ! Create directory
-      if (self%cfg%amRoot) then
+      if (self%cfg%amRoot .and. self%mkdirs) then
          call execute_command_line('mkdir -p ensight')
          call execute_command_line('mkdir -p ensight/'//trim(self%name))
       end if
@@ -171,7 +179,7 @@ contains
       ! Point list to new object
       this%first_scl=>new_scl
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
+      if (this%cfg%amRoot .and. this%mkdirs) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
    end subroutine add_rscalar
 
 
@@ -192,7 +200,7 @@ contains
       ! Point list to new object
       this%first_scl=>new_scl
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
+      if (this%cfg%amRoot .and. this%mkdirs) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_scl%name))
    end subroutine add_iscalar
 
 
@@ -216,7 +224,7 @@ contains
       ! Point list to new object
       this%first_vct=>new_vct
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_vct%name))
+      if (this%cfg%amRoot .and. this%mkdirs) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_vct%name))
    end subroutine add_vector
 
 
@@ -236,7 +244,7 @@ contains
       ! Point list to new object
       this%first_srf=>new_srf
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_srf%name))
+      if (this%cfg%amRoot .and. this%mkdirs) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_srf%name))
    end subroutine add_surface
 
 
@@ -256,7 +264,7 @@ contains
       ! Point list to new object
       this%first_prt=>new_prt
       ! Also create the corresponding directory
-      if (this%cfg%amRoot) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_prt%name))
+      if (this%cfg%amRoot .and. this%mkdirs) call execute_command_line('mkdir -p ensight/'//trim(this%name)//'/'//trim(new_prt%name))
    end subroutine add_particle
 
 

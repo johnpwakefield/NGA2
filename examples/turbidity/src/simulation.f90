@@ -39,7 +39,7 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,dRHOdt
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
   real(WP), dimension(:,:,:), allocatable :: tmp1,tmp2,tmp3
-  real(WP) :: visc,rho,inlet_velocity
+  real(WP) :: visc,rho,xfront,ufront
 
   !> Max timestep size for LPT
   real(WP) :: lp_dt,lp_dt_max
@@ -97,6 +97,28 @@ contains
      isIn=.false.
      if (j.eq.pg%jmax+1) isIn=.true.
    end function top_of_domain
+
+
+   !> Determine front position and velocity from max particle position
+   subroutine get_front(dt)
+   use mpi_f08
+   use parallel, only: MPI_REAL_WP
+   implicit none
+   real(WP), intent(in), optional :: dt
+   real(WP) :: my_xfront,xfront_old
+   integer :: i,ierr
+   if (present(dt)) xfront_old=xfront
+   my_xfront=0.0_WP
+   do i=1,lp%np_
+      my_xfront=max(my_xfront,lp%p(i)%pos(1))
+   end do
+   call MPI_ALLREDUCE(my_xfront,xfront,1,MPI_REAL_WP,MPI_MAX,lp%cfg%comm,ierr)
+   if (present(dt)) then
+      ufront=(xfront-xfront_old)/dt
+   else
+      ufront=0.0_WP
+   end if
+ end subroutine get_front
 
 
   !> Initialization of problem solver
@@ -180,7 +202,7 @@ contains
       use random, only: random_uniform
       use mathtools, only: Pi
       real(WP) :: dp,Wbed,VFavg,Volp
-      integer :: i,j,np
+      integer :: i,j,np,ierr
       logical :: overlap
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
@@ -259,6 +281,8 @@ contains
          print*,'Number of particles', np
          print*,'Mean volume fraction',VFavg
       end if
+      ! Compute initial front position and velocity
+      call get_front()
     end block initialize_lpt
 
 
@@ -379,6 +403,8 @@ contains
       call lptfile%add_column(lp_dt,'Particle dt')
       call lptfile%add_column(lp%VFmean,'VFp mean')
       call lptfile%add_column(lp%VFmax,'VFp max')
+      call lptfile%add_column(xfront,'Xfront')
+      call lptfile%add_column(ufront,'Ufront')
       call lptfile%add_column(lp%np,'Particle number')
       call lptfile%add_column(lp%Umin,'Particle Umin')
       call lptfile%add_column(lp%Umax,'Particle Umax')
@@ -386,8 +412,6 @@ contains
       call lptfile%add_column(lp%Vmax,'Particle Vmax')
       call lptfile%add_column(lp%Wmin,'Particle Wmin')
       call lptfile%add_column(lp%Wmax,'Particle Wmax')
-      call lptfile%add_column(lp%dmin,'Particle dmin')
-      call lptfile%add_column(lp%dmax,'Particle dmax')
       call lptfile%write()
       ! Create timing monitor
       tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
@@ -601,6 +625,7 @@ contains
        end if
 
        ! Perform and output monitoring
+       call get_front(time%dt)
        call fs%get_max()
        call lp%get_max()
        call mfile%write()

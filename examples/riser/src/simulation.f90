@@ -291,7 +291,7 @@ contains
                        &       random_uniform(lp%cfg%y(lp%cfg%jmin_),lp%cfg%y(lp%cfg%jmax_+1)-dmax),&
                        &       random_uniform(lp%cfg%z(lp%cfg%kmin_),lp%cfg%z(lp%cfg%kmax_+1)-dmax)]
                   if (lp%cfg%nz.eq.1) lp%p(i)%pos(3)=0.0_WP
-                  if (sqrt(sum(lp%p(i)%pos(2:3))**2).lt.0.5*(D-lp%p(i)%d)) outside=.false.
+                  if (sqrt(sum(lp%p(i)%pos(2:3)**2)).lt.0.5*(D-lp%p(i)%d)) outside=.false.
                end do
                lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                overlap=.false.

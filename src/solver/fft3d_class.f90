@@ -26,7 +26,7 @@ module fft3d_class
       real(WP), dimension(:,:,:), allocatable :: transformed_rhs
       
    contains
-      
+     ,WP 
       procedure :: print_short=>fft3d_print_short !< One-line printing of solver status
       procedure :: print=>fft3d_print             !< Long-form printing of solver status
       procedure :: log=>fft3d_log                 !< Long-form logging of solver status
@@ -172,7 +172,7 @@ contains
                      k2eff=k2eff+this%opr(st,i,j,k)*exp((0.0_WP,1.0_WP)*kk*this%cfg%xm(i+this%stc(st,1)))
                   end do
                   k2eff=k2eff/exp((0.0_WP,1.0_WP)*kk*this%cfg%xm(i))
-                  this%transformed_opr(i,j,k)=this%transformed_opr(i,j,k)+realpart(k2eff)
+                  this%transformed_opr(i,j,k)=this%transformed_opr(i,j,k)+real(k2eff,WP)
                end do
             end do
          end do
@@ -197,7 +197,7 @@ contains
                      k2eff=k2eff+this%opr(st,i,j,k)*exp((0.0_WP,1.0_WP)*kk*this%cfg%ym(j+this%stc(st,2)))
                   end do
                   k2eff=k2eff/exp((0.0_WP,1.0_WP)*kk*this%cfg%ym(j))
-                  this%transformed_opr(i,j,k)=this%transformed_opr(i,j,k)+realpart(k2eff)
+                  this%transformed_opr(i,j,k)=this%transformed_opr(i,j,k)+real(k2eff,WP)
                end do
             end do
          end do
@@ -222,7 +222,7 @@ contains
                      k2eff=k2eff+this%opr(st,i,j,k)*exp((0.0_WP,1.0_WP)*kk*this%cfg%zm(k+this%stc(st,3)))
                   end do
                   k2eff=k2eff/exp((0.0_WP,1.0_WP)*kk*this%cfg%zm(k))
-                  this%transformed_opr(i,j,k)=this%transformed_opr(i,j,k)+realpart(k2eff)
+                  this%transformed_opr(i,j,k)=this%transformed_opr(i,j,k)+real(k2eff,WP)
                end do
             end do
          end do

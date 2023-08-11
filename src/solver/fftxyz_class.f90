@@ -204,7 +204,7 @@ contains
       call this%dft%ytransform_backward(this%transformed_rhs)
       call this%dft%ztransform_backward(this%transformed_rhs)
       ! Copy to strided output
-      this%sol(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=realpart(this%transformed_rhs)
+      this%sol(this%cfg%imin_:this%cfg%imax_,this%cfg%jmin_:this%cfg%jmax_,this%cfg%kmin_:this%cfg%kmax_)=real(this%transformed_rhs,WP)
       ! Sync the solution vector
       call this%cfg%sync(this%sol)
       ! If verbose run, log and or print info

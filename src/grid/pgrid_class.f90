@@ -443,6 +443,8 @@ contains
       type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k
 
+      if (this%no.lt.1) return
+
       ! Work in x - is it 2D or 3D?
       if (this%nx.eq.1) then
          ! Direct copy if 2D
@@ -524,6 +526,8 @@ contains
       integer, dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k
+
+      if (this%no.lt.1) return
 
       ! Work in x - is it 2D or 3D?
       if (this%nx.eq.1) then
@@ -704,6 +708,8 @@ contains
       integer :: isrc,idst,ierr,isize,i,j,k,dim
       real(WP), dimension(:,:,:,:), allocatable :: buf1,buf2
 
+      if (this%no.lt.1) return
+
       ! Get first dimension
       dim=size(A,DIM=1)
 
@@ -801,6 +807,8 @@ contains
       type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k,dim1,dim2
       real(WP), dimension(:,:,:,:,:), allocatable :: buf1,buf2
+
+      if (this%no.lt.1) return
 
       ! Get first two dimensions
       dim1=size(A,DIM=1)
@@ -995,6 +1003,8 @@ contains
       real(WP), dimension(this%imino_:,this%jmino_:,this%kmino_:), intent(inout) :: A !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       type(MPI_Status) :: status
       integer :: isrc,idst,ierr,isize,i,j,k
+
+      if (this%no.lt.1) return
 
       ! Work in x - is it 2D or 3D?
       if (this%nx.eq.1) then

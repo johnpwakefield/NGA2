@@ -61,6 +61,7 @@ module lptcoupler_class
     integer :: srcflag = 0                            !< what to set the flag to when removing a particle
     integer :: dstflag = 1                            !< what to set the flag to when removing a particle
     logical :: dontsync = .false.                     !< skip syncing/recycling in dst
+    integer, dimension(:), allocatable :: pushflagfilter  !< flags to skip when pushing
 
   contains
 
@@ -331,6 +332,10 @@ contains
 
     do i = 1, this%src%np_
       if (.not. this%in_overlap(this%src%p(i)%pos)) cycle
+      !TODO this chunk is new
+      if (allocated(this%pushflagfilter)) then
+        if (any(this%src%p(i)%flag .eq. this%pushflagfilter)) cycle
+      end if
       dstind = this%dsg%get_ijk_global(this%src%p(i)%pos)
       urank = this%urankmap(dstind(1), dstind(2), dstind(3))
       drank = this%drankmap(dstind(1), dstind(2), dstind(3))

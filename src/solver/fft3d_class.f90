@@ -26,7 +26,6 @@ module fft3d_class
       real(WP), dimension(:,:,:), allocatable :: transformed_rhs
       
    contains
-     ,WP 
       procedure :: print_short=>fft3d_print_short !< One-line printing of solver status
       procedure :: print=>fft3d_print             !< Long-form printing of solver status
       procedure :: log=>fft3d_log                 !< Long-form logging of solver status

@@ -18,6 +18,12 @@ contains
    !> This comes from the GFortran website.
    subroutine random_initialize
       use precision, only: I4,I8
+! something like this should provide a portable way to get intel compilers to
+! work, but at least on my system some preprocessing directives aren't handled
+! properly, so I've commented it out for now.
+! #ifdef IFORT
+!       use ifport, only: getpid
+! #endif
       implicit none
       integer(kind=I4), allocatable, dimension(:) :: seed
       integer(kind=I4) :: i,n,un,istat,dt(8),pid

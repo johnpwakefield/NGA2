@@ -800,18 +800,22 @@ contains
       xflw%lp%filter_width = cube%lp%filter_width
       xflw%lp%rho = cube%lp%rho
 
-      call xflw%lp%resize(1)
-      xflw%lp%p(1)%id = int(666, 8)
-      xflw%lp%p(1)%d = ec_params(6)
-      xflw%lp%p(1)%pos = (/ 0.9_WP * xflw%cfg%xL, 0.1_WP * xflw%cfg%yL,       &
-        0.1_WP * xflw%cfg%zL /)
-      xflw%lp%p(1)%ind = (/ xflw%cfg%imax, xflw%cfg%jmin, xflw%cfg%kmin /)
-      xflw%lp%p(1)%ind = xflw%lp%cfg%get_ijk_global(xflw%lp%p(1)%pos,         &
-        xflw%lp%p(1)%ind)
-      xflw%lp%p(1)%vel(:) = xflw%cfg%get_velocity(pos=xflw%lp%p(1)%pos,       &
-        i0=xflw%lp%p(1)%ind(1), j0=xflw%lp%p(1)%ind(2),                       &
-        k0=xflw%lp%p(1)%ind(3), U=xflw%fs%U, V=xflw%fs%V, W=xflw%fs%W)
-      xflw%lp%p(1)%flag = 3
+      if (xflw%lp%cfg%amRoot) then
+        call xflw%lp%resize(1)
+        xflw%lp%p(1)%id = int(666, 8)
+        xflw%lp%p(1)%d = ec_params(6)
+        xflw%lp%p(1)%pos = (/ 0.8_WP * xflw%cfg%xL, 0.3_WP * xflw%cfg%yL,       &
+          0.3_WP * xflw%cfg%zL /)
+        xflw%lp%p(1)%ind = (/ xflw%cfg%imax-2, xflw%cfg%jmin+1, xflw%cfg%kmin+1 /)
+        xflw%lp%p(1)%ind = xflw%lp%cfg%get_ijk_global(xflw%lp%p(1)%pos,         &
+          xflw%lp%p(1)%ind)
+        xflw%lp%p(1)%vel(:) = xflw%cfg%get_velocity(pos=xflw%lp%p(1)%pos,       &
+          i0=xflw%lp%p(1)%ind(1), j0=xflw%lp%p(1)%ind(2),                       &
+          k0=xflw%lp%p(1)%ind(3), U=xflw%fs%U, V=xflw%fs%V, W=xflw%fs%W)
+        xflw%lp%p(1)%flag = 3
+      else
+        call xflw%lp%resize(0)
+      end if
       call xflw%lp%sync()
       call xflw%lp%update_VF()
 
@@ -1016,18 +1020,14 @@ contains
         wt_cube_lpt%time = wt_cube_lpt%time + parallel_time() - wt_cube_lpt%time_in
         ! re-flag particles within the acceptable range as copyable
         reset_particle_flags: block
-          integer :: i, resetcount
-          resetcount = 0
+          integer :: i
           do i = 1, cube%lp%np_
             if (part_reset_bdrys(1) .lt. cube%lp%p(i)%pos(1) .and.            &
                 part_reset_bdrys(2) .gt. cube%lp%p(i)%pos(1) .and.            &
                 cube%lp%p(i)%flag .eq. 2) then
               cube%lp%p(i)%flag = 0
-              resetcount = resetcount + 1
             end if
           end do
-          write(*,*) "Reset ", resetcount, " particles on task ",             &
-            cube%cfg%rank, "."
         end block reset_particle_flags
         ! Perform sub-iterations
         do it = 1, time%itmax

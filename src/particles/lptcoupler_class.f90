@@ -4,6 +4,7 @@ module lptcoupler_class
   use mpi_f08,        only: MPI_COMM, MPI_GROUP, MPI_UNDEFINED
   use string,         only: str_medium
   use sgrid_class,    only: sgrid
+  use pgrid_class,    only: pgrid
   use config_class,   only: config
   use lpt_class,      only: lpt, part
   implicit none
@@ -23,7 +24,12 @@ module lptcoupler_class
     ! This is the name of the coupler
     character(len=str_medium) :: name='UNNAMED_LPTCPL'!< Coupler name (default=UNNAMED_CPL)
 
-    ! source and destination lpt objects
+    ! source and destination objects
+    ! we allow two operation modes, one in which the destination is another lpt and one in which
+    ! the destination is an array; the mode is determine automatically from which set_dst is
+    ! dispatched
+    logical :: array_mode
+    class(pgrid), pointer :: dst_pg
     type(lpt), pointer :: src, dst
 
     ! destination sgrid (needed on all processes for particle localization)
@@ -35,7 +41,8 @@ module lptcoupler_class
     real(WP), dimension(3) :: olapmin, olapmax
 
     ! Logicals to help us know if we have received a src or dst grid
-    logical :: have_src, have_dst, initialized
+    logical :: initialized = .false.  ! default value here skips finalizer
+    logical :: have_src, have_dst
 
     ! This is our communication information
     type(MPI_COMM) :: comm                            !< Intracommunicator over (at least) the union of both groups
@@ -52,6 +59,10 @@ module lptcoupler_class
     type(part), dimension(:), pointer :: sendbuf      !< Send buffer (sendbufsize times dgrp size)
     type(part), dimension(:), pointer :: recvbuf      !< Receive buffer (recvbufsize)
 
+    ! Particle array used for array mode
+    integer :: pulledparticlecount
+    type(part), dimension(:), pointer :: pulledparticles
+
     ! Miscellaneous behavior flags for debugging or specialized use cases
     !   - to skip removal of particles from overlap domain in dst, set
     !     dstflag = 0 but leave dontsync = .false.
@@ -66,7 +77,9 @@ module lptcoupler_class
   contains
 
     procedure :: set_src                              !< Sets the source
-    procedure :: set_dst                              !< Sets the destination
+    generic :: set_dst => set_dst_lpt, set_dst_arr    !< Sets the destination
+    procedure, private :: set_dst_lpt
+    procedure, private :: set_dst_arr
     procedure :: initialize                           !< Allocate buffers
     procedure :: in_overlap                           !< Check if a point is in the overlap region
     procedure :: push                                 !< Src routine that pushes a field into our send data storage
@@ -142,7 +155,7 @@ contains
   end subroutine set_src
 
   !> Set the destination lpt
-  subroutine set_dst(this, ps)
+  subroutine set_dst_lpt(this, ps)
     use messager, only: warn
     implicit none
     class(lptcoupler), intent(inout) :: this
@@ -150,13 +163,32 @@ contains
 
     if (this%have_dst) call warn('[lptcoupler] destination grid has already been set')
 
-    this%dst => ps; this%have_dst = .true.; this%initialized = .false.;
+    this%array_mode = .false.; this%have_dst = .true.; this%initialized = .false.;
 
-    ! we check that the this%dst%cfg%comm rank and the
-    ! this%dst%cfg%group ranks are equal
-    call check_ranks_equal(this%dst%cfg%comm, this%dst%cfg%group)
+    this%dst => ps; this%dst_pg => ps%cfg;
 
-  end subroutine set_dst
+    ! we check that the this%dst_pg%comm rank and the
+    ! this%dst_pg%group ranks are equal
+    call check_ranks_equal(this%dst_pg%comm, this%dst_pg%group)
+
+  end subroutine set_dst_lpt
+  subroutine set_dst_arr(this, pg)
+    use messager, only: warn
+    implicit none
+    class(lptcoupler), intent(inout) :: this
+    class(pgrid), target, intent(in) :: pg
+
+    if (this%have_dst) call warn('[lptcoupler] destination grid has already been set')
+
+    this%array_mode = .true.; this%have_dst = .true.; this%initialized = .false.;
+
+    this%dst => null(); this%dst_pg => pg;
+
+    ! we check that the this%dst_pg%comm rank and the
+    ! this%dst_pg%group ranks are equal
+    call check_ranks_equal(this%dst_pg%comm, this%dst_pg%group)
+
+  end subroutine set_dst_arr
 
   !> Function to check ranks are equal between a group and a communicator
   subroutine check_ranks_equal(comm, group)
@@ -215,12 +247,12 @@ contains
       tcorner(3) = min(this%src%cfg%z(this%src%cfg%kmax+1), tcorner(3))
     end if
     if (this%drank .eq. 0) then
-      bcorner(1) = max(this%dst%cfg%x(this%dst%cfg%imin  ), bcorner(1))
-      bcorner(2) = max(this%dst%cfg%y(this%dst%cfg%jmin  ), bcorner(2))
-      bcorner(3) = max(this%dst%cfg%z(this%dst%cfg%kmin  ), bcorner(3))
-      tcorner(1) = min(this%dst%cfg%x(this%dst%cfg%imax+1), tcorner(1))
-      tcorner(2) = min(this%dst%cfg%y(this%dst%cfg%jmax+1), tcorner(2))
-      tcorner(3) = min(this%dst%cfg%z(this%dst%cfg%kmax+1), tcorner(3))
+      bcorner(1) = max(this%dst_pg%x(this%dst_pg%imin  ), bcorner(1))
+      bcorner(2) = max(this%dst_pg%y(this%dst_pg%jmin  ), bcorner(2))
+      bcorner(3) = max(this%dst_pg%z(this%dst_pg%kmin  ), bcorner(3))
+      tcorner(1) = min(this%dst_pg%x(this%dst_pg%imax+1), tcorner(1))
+      tcorner(2) = min(this%dst_pg%y(this%dst_pg%jmax+1), tcorner(2))
+      tcorner(3) = min(this%dst_pg%z(this%dst_pg%kmax+1), tcorner(3))
     end if
     call mpi_allreduce(bcorner, this%olapmin, 3, MPI_REAL_WP, MPI_MAX,        &
       this%comm, ierr)
@@ -236,22 +268,25 @@ contains
       logical, dimension(3) :: pers
       type(sgrid), pointer :: sgptr
       if (this%urank .eq. this%droot) then
-        intparams = (/ this%dst%cfg%coordsys, this%dst%cfg%no,                &
-          this%dst%cfg%nx, this%dst%cfg%ny, this%dst%cfg%nz /)
-        pers = (/ this%dst%cfg%xper, this%dst%cfg%yper, this%dst%cfg%zper /)
-        x => this%dst%cfg%x(this%dst%cfg%imin:this%dst%cfg%imax+1)
-        y => this%dst%cfg%y(this%dst%cfg%jmin:this%dst%cfg%jmax+1)
-        z => this%dst%cfg%z(this%dst%cfg%kmin:this%dst%cfg%kmax+1)
+        intparams = (/ this%dst_pg%coordsys, this%dst_pg%no,                  &
+          this%dst_pg%nx, this%dst_pg%ny, this%dst_pg%nz /)
+        pers = (/ this%dst_pg%xper, this%dst_pg%yper, this%dst_pg%zper /)
+        x => this%dst_pg%x(this%dst_pg%imin:this%dst_pg%imax+1)
+        y => this%dst_pg%y(this%dst_pg%jmin:this%dst_pg%jmax+1)
+        z => this%dst_pg%z(this%dst_pg%kmin:this%dst_pg%kmax+1)
       end if
       call mpi_bcast(intparams, 5, MPI_INTEGER, this%droot, this%comm, ierr)
       call mpi_bcast(pers, 3, MPI_LOGICAL, this%droot, this%comm, ierr)
       if (this%urank .ne. this%droot)                                         &
         allocate(x(intparams(3)+1), y(intparams(4)+1), z(intparams(5)+1))
-      call mpi_bcast(x, intparams(3)+1, MPI_REAL_WP, this%droot, this%comm, ierr)
-      call mpi_bcast(y, intparams(4)+1, MPI_REAL_WP, this%droot, this%comm, ierr)
-      call mpi_bcast(z, intparams(5)+1, MPI_REAL_WP, this%droot, this%comm, ierr)
+      call mpi_bcast(x, intparams(3)+1, MPI_REAL_WP, this%droot, this%comm,   &
+        ierr)
+      call mpi_bcast(y, intparams(4)+1, MPI_REAL_WP, this%droot, this%comm,   &
+        ierr)
+      call mpi_bcast(z, intparams(5)+1, MPI_REAL_WP, this%droot, this%comm,   &
+        ierr)
       if (this%drank .ne. MPI_UNDEFINED) then
-        this%dsg => this%dst%cfg
+        this%dsg => this%dst_pg
       else
         allocate(sgptr)
         sgptr = sgrid(intparams(1), intparams(2), x, y, z, pers(1), pers(2),  &
@@ -267,12 +302,12 @@ contains
     allocate(this%drankmap(this%dsg%imino:this%dsg%imaxo,                     &
       this%dsg%jmino:this%dsg%jmaxo,this%dsg%kmino:this%dsg%kmaxo))
     if (this%drank .eq. 0) then
-      do k = this%dst%cfg%kmino, this%dst%cfg%kmaxo
-        do j = this%dst%cfg%jmino, this%dst%cfg%jmaxo
-          do i = this%dst%cfg%imino, this%dst%cfg%imaxo
-            this%drankmap(i,j,k) = this%dst%cfg%get_rank((/ i, j, k /))
+      do k = this%dst_pg%kmino, this%dst_pg%kmaxo
+        do j = this%dst_pg%jmino, this%dst_pg%jmaxo
+          do i = this%dst_pg%imino, this%dst_pg%imaxo
+            this%drankmap(i,j,k) = this%dst_pg%get_rank((/ i, j, k /))
           end do
-          call mpi_group_translate_ranks(this%dgrp, this%dst%cfg%nxo,         &
+          call mpi_group_translate_ranks(this%dgrp, this%dst_pg%nxo,          &
             this%drankmap(:,j,k), this%ugrp, this%urankmap(:,j,k))
         end do
       end do
@@ -369,22 +404,33 @@ contains
 
     if (this%drank .eq. MPI_UNDEFINED) return
 
-    if (this%dstflag .ne. 0) then
-      do i = 1, this%dst%np_
-        if (this%in_overlap(this%dst%p(i)%pos)) then
-          this%dst%p(i)%flag = this%dstflag
-        end if
-      end do
-    end if
-
-    if (.not. this%dontsync) call this%dst%recycle()
-
     recv_tot = sum(this%recvcounts)
-    call this%dst%resize(this%dst%np_+recv_tot, dontshrink=.true.)
-    this%dst%p((this%dst%np_+1):(this%dst%np_+recv_tot)) = this%recvbuf(1:recv_tot)
-    this%dst%np_ = this%dst%np_ + recv_tot
 
-    if (.not. this%dontsync) call this%dst%sync()
+    if (this%array_mode) then
+
+      this%pulledparticlecount = recv_tot
+      this%pulledparticles => this%recvbuf(1:recv_tot)
+
+    else
+
+      !TODO do we want this dstflag conditional?
+      if (this%dstflag .ne. 0) then
+        do i = 1, this%dst%np_
+          if (this%in_overlap(this%dst%p(i)%pos)) then
+            this%dst%p(i)%flag = this%dstflag
+          end if
+        end do
+      end if
+
+      if (.not. this%dontsync) call this%dst%recycle()
+
+      call this%dst%resize(this%dst%np_+recv_tot, dontshrink=.true.)
+      this%dst%p((this%dst%np_+1):(this%dst%np_+recv_tot)) = this%recvbuf(1:recv_tot)
+      this%dst%np_ = this%dst%np_ + recv_tot
+
+      if (.not. this%dontsync) call this%dst%sync()
+
+    end if
 
   end subroutine pull
 

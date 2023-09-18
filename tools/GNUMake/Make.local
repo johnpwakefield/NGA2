@@ -17,6 +17,10 @@ CXX := mpicxx
 CC  := mpicc
 FC  := mpifort
 F90 := mpifort
+#CXX := /opt/intel/mpi/latest/bin/mpiicpc
+#CC  := /opt/intel/mpi/latest/bin/mpiicc
+#FC  := /opt/intel/mpi/latest/bin/mpiifort
+#F90 := /opt/intel/mpi/latest/bin/mpiifort
 #   AMReX uses MPI in both C++ and Fortran.  Because CXX is used for linking, you MAY need to
 #   provide path to MPI Fortran library.
 #LIBRARIES += -lmpif90
@@ -40,8 +44,8 @@ endif
 
 
 # When I run on my local desktop, I like to add this gfortran flag.
-FFLAGS   += -fcheck=array-temps
-F90FLAGS += -fcheck=array-temps # --std=f2008
+#FFLAGS   += -fcheck=array-temps
+#F90FLAGS += -fcheck=array-temps # --std=f2008
 
 
 # Instead of linking to static gfortran library, I like to use shared libraries.

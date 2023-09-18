@@ -199,6 +199,22 @@ contains
     use param, only: param_read
     implicit none
 
+    ! Before allocating anything, create directories needed for ensight and hitstats output
+    create_directories: block
+      use mpi_f08, only: mpi_barrier
+      if (cfg%amroot) then
+        call execute_command_line("mkdir -p ./npy")
+        call execute_command_line("mkdir -p ./n/npy/hitslicexz")
+        call execute_command_line("mkdir -p ./n/npy/hitslicexy")
+        call execute_command_line("mkdir -p ./n/ensight")
+        call execute_command_line("mkdir -p ./n/ensight/HIT")
+        call execute_command_line("mkdir -p ./n/ensight/HIT/velocity")
+        call execute_command_line("mkdir -p ./n/ensight/HIT/pressure")
+        call execute_command_line("mkdir -p ./n/ensight/HIT/particles")
+      end if
+      call mpi_barrier(cfg%comm)
+    end block create_directories
+
     ! Allocate work arrays
     allocate_work_arrays: block
       allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))

@@ -4,8 +4,8 @@ Partition :	4 8 1
 # Mesh definition
 Cube Lx   : 1.0
 Cube Nx   : 144
-Xflow Ll  : 6.0
-Xflow Nl  : 600
+Xflow Ll  : 4.0
+Xflow Nl  : 400
 Xflow Nw  : 144
 Overlap   : 0.04
 
@@ -45,7 +45,7 @@ EC data per statpoint : 40
 
 # data collection parameters
 EC integral timescales :    1.0
-EC new sim multiplier :     8.0
+EC new sim multiplier :     80.0
 EC new params multiplier :  2.0
 
 # EC Parameters

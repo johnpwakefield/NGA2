@@ -51,7 +51,7 @@ module simulation
   !> or reinterpolate data manually.  In addition, it's easy enough to
   !> dynamically adjust this velocity to match some multiple of the cube's rms
   !> velocity.
-  real(WP) :: xflowmult, xflowrelaxtime, xflowveltarget, xflowvelcurr
+  real(WP) :: xflowmult, xflowvel
 
 
   !> we use 1 for a particle that is going to be cleaned up (as is enforced
@@ -67,8 +67,7 @@ module simulation
     type(config) :: cfg
     type(incomp) :: fs
     real(WP) :: cfl, meanU, meanV, meanW
-    real(WP), dimension(:,:,:), allocatable :: rho, sx, sy, sz,               &
-                                               resU, resV, resW, Ui, Vi, Wi
+    real(WP), dimension(:,:,:), allocatable :: rho, resU, resV, resW, Ui, Vi, Wi
     real(WP), dimension(:,:,:,:), allocatable :: SR
     real(WP), dimension(:,:,:,:,:), allocatable :: gradu
     type(lpt)      :: lp
@@ -79,9 +78,9 @@ module simulation
 
   type, extends(gendomain) :: cubedomain
     type(fft3d) :: ps
-    real(WP) :: urms, TKE, EPS, EPSp, eta, Re_lambda,                         &
+    real(WP) :: urms, TKE, EPS, eta, Re_lambda,                               &
       EPS_ratio, TKE_ratio, ell_ratio, dx_eta, forcingtimescale, Stk, phiinf, &
-      Wovk
+      Wovk, EPSp
     !TODO re-enable
     !type(cubestats) :: stats
     type(monitor) :: hitfile
@@ -171,12 +170,13 @@ contains
     do k = cube%fs%cfg%kmin_, cube%fs%cfg%kmax_
       do j = cube%fs%cfg%jmin_, cube%fs%cfg%jmax_
         do i = cube%fs%cfg%imin_, cube%fs%cfg%imax_
-          myTKE = myTKE + 0.5_WP*((cube%fs%U(i,j,k)-cube%meanU)**2 +               &
-            (cube%fs%V(i,j,k)-cube%meanV)**2 + (cube%fs%W(i,j,k)-cube%meanW)**2         &
+          myTKE = myTKE + 0.5_WP*((cube%fs%U(i,j,k)-cube%meanU)**2 +              &
+            (cube%fs%V(i,j,k)-cube%meanV)**2 + (cube%fs%W(i,j,k)-cube%meanW)**2   &
             )*cube%fs%cfg%vol(i,j,k)
-          myEPS = myEPS + 2.0_WP*cube%fs%visc(i,j,k)*cube%fs%cfg%vol(i,j,k)*(           &
-            cube%SR(1,i,j,k)**2+cube%SR(2,i,j,k)**2+cube%SR(3,i,j,k)**2+2.0_WP*(             &
-            cube%SR(4,i,j,k)**2+cube%SR(5,i,j,k)**2+cube%SR(6,i,j,k)**2))/cube%fs%rho
+          myEPS = myEPS + 2.0_WP*cube%fs%visc(i,j,k)*cube%fs%cfg%vol(i,j,k)*(     &
+            cube%SR(1,i,j,k)**2+cube%SR(2,i,j,k)**2+cube%SR(3,i,j,k)**2+2.0_WP*(  &
+            cube%SR(4,i,j,k)**2+cube%SR(5,i,j,k)**2+cube%SR(6,i,j,k)**2)          &
+          ) / cube%fs%rho
           myEPSp = myEPSp + cube%fs%cfg%vol(i,j,k)*cube%fs%visc(i,j,k)*(                &
             cube%gradu(1,1,i,j,k)**2 + cube%gradu(1,2,i,j,k)**2 + cube%gradu(1,3,i,j,k)**2 + &
             cube%gradu(2,1,i,j,k)**2 + cube%gradu(2,2,i,j,k)**2 + cube%gradu(2,3,i,j,k)**2 + &
@@ -206,7 +206,8 @@ contains
     ! nondimensional particle quantities
     cube%Stk = ec_params(2) / ec_params(1) * ec_params(6)**2                  &
       / (18 * cube%eta**2)
-    cube%phiinf = cube%lp%np * pi * ec_params(6)**3 / (6 * cube%fs%cfg%vol_total)
+    cube%phiinf = cube%lp%np * pi * ec_params(6)**3 /                         &
+      (6 * cube%fs%cfg%vol_total)
     cube%Wovk = ec_params(7) * ec_params(2) / ec_params(1) * ec_params(6)**2  &
       * cube%eta / (18 * nu**2)
 
@@ -216,7 +217,6 @@ contains
   subroutine update_parameters()
     implicit none
     integer :: i
-    real(WP) :: alpha
 
     ! fluid parameters
     cube%fs%rho = ec_params(1)
@@ -225,9 +225,6 @@ contains
     xflw%rho(:,:,:) = xflw%fs%rho
     cube%fs%visc(:,:,:) = ec_params(1) * ec_params(5)
     xflw%fs%visc(:,:,:) = ec_params(1) * ec_params(5)
-
-    !TODO what is this for?
-    cube%sx(:,:,:) = 0.0_WP; cube%sy(:,:,:) = 0.0_WP; cube%sz(:,:,:) = 0.0_WP;
 
     ! particle parameters
     cube%lp%rho = ec_params(2); xflw%lp%rho = ec_params(2);
@@ -240,29 +237,16 @@ contains
     xflw%lp%gravity(:) = (/ 0.0_WP, -ec_params(7), 0.0_WP /)
 
     ! set xflow velocity
-    xflowveltarget = cube%urms * xflowmult
-    alpha = time%dt / xflowrelaxtime
-    xflowvelcurr = (xflowvelcurr + alpha * xflowveltarget) / (1.0_WP + alpha)
+    call cube%fs%cfg%integrate(A=cube%fs%U, integral=cube%meanU)
+    cube%meanU = cube%meanU / cube%fs%cfg%vol_total
+    xflowvel = xflowmult * sqrt(2.0_WP / 3 * ec_params(3))
     fix_mean_vel: block
-      use mpi_f08, only: mpi_allreduce, MPI_SUM
-      use parallel, only: comm, MPI_REAL_WP
-      real(WP), dimension(2) :: xvels, xvels_loc
-      integer :: j, k, ierr
-      xvels_loc(:) = 0.0_WP
-      do k = xflw%cfg%kmin_, xflw%cfg%kmax_
-        do j = xflw%cfg%jmax_, xflw%cfg%jmax_
-          xvels_loc(1) = xvels_loc(1) + sum(xflw%fs%U(xflw%cfg%imin_:xflw%cfg%imax_,j,k))
-        end do
-      end do
-      do k = cube%cfg%kmin_, cube%cfg%kmax_
-        do j = cube%cfg%jmax_, cube%cfg%jmax_
-          xvels_loc(2) = xvels_loc(2) + sum(cube%fs%U(cube%cfg%imin_:cube%cfg%imax_,j,k))
-        end do
-      end do
-      xvels_loc(:) = xvels_loc(:) / (xflw%cfg%nx * xflw%cfg%ny * xflw%cfg%nz)
-      call mpi_allreduce(xvels_loc, xvels, 2, MPI_REAL_WP, MPI_SUM, comm, ierr)
-      xflw%fs%U(:,:,:) = xflw%fs%U(:,:,:) + (xflowvelcurr - xvels(1))
-      cube%fs%U(:,:,:) = cube%fs%U(:,:,:) + (xflowvelcurr - xvels(2))
+      call cube%fs%cfg%integrate(A=cube%fs%U, integral=cube%meanU)
+      cube%meanU = cube%meanU / cube%fs%cfg%vol_total
+      call xflw%fs%cfg%integrate(A=xflw%fs%U, integral=xflw%meanU)
+      xflw%meanU = xflw%meanU / xflw%fs%cfg%vol_total
+      cube%fs%U(:,:,:) = cube%fs%U(:,:,:) + (xflowvel - cube%meanU)
+      xflw%fs%U(:,:,:) = xflw%fs%U(:,:,:) + (xflowvel - xflw%meanU)
     end block fix_mean_vel
 
     ! store parameters that are difficult to access for reference elsewhere
@@ -610,9 +594,6 @@ contains
     allocate(d%SR(1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
     allocate(d%gradu(1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
     allocate(d%rho(imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
-    allocate(d%sx(imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
-    allocate(d%sy(imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
-    allocate(d%sz(imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_))
 
   end subroutine gendomain_allocate
 
@@ -691,9 +672,8 @@ contains
 
     ! Read xflow parameters
     call param_read('Xflow rms mult', xflowmult)
-    call param_read('Xflow relax time', xflowrelaxtime)
-    xflowveltarget = sqrt(2.0_WP / 3 * ec_params(3)) * xflowmult
-    xflowvelcurr = xflowveltarget
+    !call param_read('Xflow relax time', xflowrelaxtime)
+    xflowvel = sqrt(2.0_WP / 3 * ec_params(3)) * xflowmult
 
     ! Create a single-phase flow solvers
     create_and_initialize_flow_solver: block
@@ -831,11 +811,9 @@ contains
     !  call param_read('Cube FFT mesh', hitFFTN)
     !  call param_read('XFlow FFT mesh', xflowFFTN)
     !  call cube%stats%init(cube%cfg, filterfile, FFTN, cube%rho,              &
-    !    cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W,                        &
-    !    cube%fs%sx, cube%fs%sy, cube%fs%sz, cube%ps)
+    !    cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W, cube%ps)
     !  call xflow%stats%init(cube%cfg, filterfile, FFTN, cube%rho,             &
-    !    cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W,                        &
-    !    cube%fs%sx, cube%fs%sy, cube%fs%sz, cube%ps)
+    !    cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W, cube%ps)
     !  call cube%stats%init_filters()
     !  call xflow%stats%init_filters()
     !  call cube%stats%setup_sliceio()
@@ -853,7 +831,6 @@ contains
       name='Domain Coupler')
     dom_lptcpl = lptcoupler(src_grp=cube%cfg%group, dst_grp=xflw%cfg%group,   &
       name='Domain LPT Coupler')
-    !TODO these wonky settings are new; make sure they work
     dom_lptcpl%srcflag = 2
     dom_lptcpl%dstflag = 0
     allocate(dom_lptcpl%pushflagfilter(1))
@@ -1002,8 +979,9 @@ contains
         time%cfl = max(cube%cfl, xflw%cfl)
         call time%adjust_dt()
         time%dt = min(time%dt, FORCE_TIMESCALE / G)
-        time%dt = min(time%dt, sqrt(nu / max(cube%EPS, cube%EPSp)))
-        !TODO
+        !time%dt = min(time%dt, sqrt(nu / max(cube%EPS, cube%EPSp)))
+        time%dt = min(time%dt, sqrt(nu / cube%EPS))
+        !TODO re-enable when controller is re-integrated
         !time%dt = min(time%dt, ec_evt%tnext - time%t)
         call time%increment()
 
@@ -1044,15 +1022,19 @@ contains
           ! Linear forcing term (Bassenne et al. 2016)
           wt_force%time_in = parallel_time()
           ! note we have stats from the previous step; they haven't changed
+          !TODO DEBUG --- recompute statistics to see if this is the issue
+          call compute_cube_stats()
           linear_forcing: block
             real(WP) :: A
             ! - Eq. (7) (forcing constant TKE)
-            A = (cube%EPSp - (G / FORCE_TIMESCALE) * (cube%TKE -       &
+            A = (cube%EPSp - (G / FORCE_TIMESCALE) * (cube%TKE -              &
               TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
+            !A = (cube%EPS - (G / FORCE_TIMESCALE) * (cube%TKE -               &
+            !  TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
             ! update residuals
-            cube%resU = cube%resU + time%dt * (cube%fs%U - cube%meanU) * A
-            cube%resV = cube%resV + time%dt * (cube%fs%V - cube%meanV) * A
-            cube%resW = cube%resW + time%dt * (cube%fs%W - cube%meanW) * A
+            cube%resU = cube%resU + time%dt * A * (cube%fs%U - cube%meanU)
+            cube%resV = cube%resV + time%dt * A * (cube%fs%V - cube%meanV)
+            cube%resW = cube%resW + time%dt * A * (cube%fs%W - cube%meanW)
           end block linear_forcing
           wt_force%time = wt_force%time + parallel_time() - wt_force%time_in
           ! Apply residuals

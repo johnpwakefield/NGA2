@@ -10,7 +10,7 @@ USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 DO_ESTIMCLOSURES=TRUE
 PROFILE   = FALSE
-DEBUG     = FALSE
+DEBUG     = TRUE
 EXEBASE   = nga
 
 # Directories that contain user-defined code

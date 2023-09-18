@@ -1,13 +1,19 @@
-
-
-
-
+!> This module contains routines and data structures needed in both the cube
+!> and xflow statistics modules.
+!>
+!> John P Wakefield, September 2023
+!>
 module filterstats
+  use precision,        only: WP
+  use string,           only: str_medium
+  use monitor_class,    only: monitor
   implicit none
   private
 
+  public :: im
   public :: FLT_GAUSSIAN, FLT_BOX, FLT_NUM_PARAMS
   public :: filter_info_row
+  public :: microstats
 
   !> imaginary constant
   complex(WP), parameter :: im = (0.0_WP, 1.0_WP)

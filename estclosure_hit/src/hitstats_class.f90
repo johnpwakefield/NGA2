@@ -451,7 +451,7 @@ contains
     stats%PB = stats%PB / N3
 
     ! compute UB
-    do n = 1, 3; UB_loc(n) = sum(up(:,:,:,n));     end do
+    do n = 1, 3; UB_loc(n) = sum(up(:,:,:,n)); end do
     call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
     stats%UB = stats%UB / N3
 
@@ -503,6 +503,7 @@ contains
     ! (the gradient of phi and phicheck is the same for HIT, but since we have
     ! phi check we will use it)
     ! x direction
+    !TODO fix this; this makes no sense
     do k = fft%pg%kmin_, fft%pg%kmax_
       do j = fft%pg%jmin_, fft%pg%jmax_
         work_c(:,j,k) = im * fft%kx(:) * phicheck(:,j,k)

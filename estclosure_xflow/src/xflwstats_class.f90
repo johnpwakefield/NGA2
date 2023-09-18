@@ -1,9 +1,20 @@
+!> Statistics for Crossflow Domain
 !>
-!> Originally written by John P Wakefield in May 2023
-!> Reworked by John P Wakefield in August 2023
+!> John P Wakefield, September 2023
+!>
+!> This class needs to collect two different types of statistics; those of
+!> the type collected by hitstats but without the benefits of periodicity and
+!> simple statistics down the crossflow domain as a function of x.
 !>
 !> Note slice is in the yz plane
 !>
+!> For crossflow statistics, the convolution in the x direction is done
+!> explicitly onto the 2d plane, then the convolution in the cross-wise
+!> directions are done in real space.  For real values this is straightforward,
+!> but for gradients it should be added that this means we need a separate
+!> set of grids in which gradients of filtered quantities in the x-direction
+!> may be explicitly projected, then spectral derivatives are taken in the y
+!> and z directions.
 !>
 module xflwstats_class
   use precision,        only: WP
@@ -19,180 +30,309 @@ module xflwstats_class
   use coupler_class,    only: coupler
   use lptcoupler_class, only: lptcoupler
   use partmesh_class,   only: partmesh
+  use filterstats
   implicit none
   private
 
+
   public :: xflwstats
 
+
+  !> microscopic statistics along domain (saved as monitor files)
+  type :: xdepstats
+    type(monitor) :: globalmon
+    integer :: step
+    integer, dimension(18) :: units
+    ! data only allocated / updated on root
+    real(WP) :: rhof, muf, dp, ntot
+    ! these arrays are only imin to imax and don't include overlap
+    real(WP), dimension(:), allocatable :: num, vf, vfsq
+    real(WP), dimension(:,:), allocatable :: vel, velsq, slp, slpsq, drg   ! 3 by nx
+  contains
+    procedure :: init => xdepstats_init
+    procedure :: write => xdepstats_write
+    final :: xdepstats_destroy
+  end type xdepstats
+
+
   !> filtered fluctuation statistics
-  type :: xflwstats
+  type :: xplanestats
     character(len=str_medium) :: out_fname
     type(monitor) :: mon
     integer :: step
     real(WP) :: PB, PC2
-    real(WP), dimension(3) :: UB, SB, PCUB, UBPCG, GPCUB  ! x, y, z
-    real(WP), dimension(3,3) :: UC2  ! only upper triangle used
+    real(WP), dimension(3) :: UB, SB, PCUB, UBPCG  ! x, y, z
+    real(WP), dimension(3,3) :: UC2   ! only upper triangle used
   contains
-    procedure :: init => xflwstats_init_mon
-    final :: xflwstats_destroy_mon
-  end type xflwstats
+    procedure :: init => xplanestats_init
+    procedure :: write => xplanestats_write
+    final :: xplanestats_destroy
+  end type xplanestats
+
 
   !> filter information
   type :: filter
     character(len=str_medium) :: filtername
-    type(xflwstats) :: fstats
     integer :: type
     real(WP), dimension(FLT_NUM_PARAMS) :: params
+    ! we make this 3d but 1 cell wide in x so that we can use existing fft
     complex(WP), dimension(:,:,:), allocatable :: flt_f
-    ! io optional for each filter
-    logical :: use_slice_io
-    real(WP), dimension(:,:,:), pointer :: io_phi
-    real(WP), dimension(:,:,:,:), pointer :: io_up
   contains
     procedure :: init => filter_init
-    final :: filter_destruct
+    final :: filter_destroy
   end type filter
 
-  ! contains both simulation aligned (*_aln) and standard grids
-  ! aligned grids use the sim_pg decomposition, but are unallocated where the
-  ! simulation region does not overlap with the fft region
-  ! the fft region is centered around the observation plane, but is much larger
-  ! in particular, the 3D FFT is still used for filtering; this window must be
-  !   large enough to contain the filter support on each side so periodicity
-  !   does not effect the results
-  !TODO left off here
-  type :: filterset
-    class(pgrid), pointer :: sim_pg
-    real(WP), dimension(:,:,:), pointer :: rhof, visc, U, V, W, sx, sy, sz
-    type(lpt), pointer :: ps
-    type(sgrid) :: fft_sg
+
+  !> observation plane in xflow region
+  ! each observation plane requires its own fft grids and data storage arrays
+  type :: obsplane
+
+    character(len=str_medium) :: label
+    real(WP) :: offset
+
+    type(MPI_GROUP) :: grp
+    logical :: in_grp
+
+    type(MPI_GROUP) :: fft_grp
+    class(config), pointer :: sim_cfg
     type(pgrid) :: fft_pg
     type(cfourier), pointer :: fft
-    integer :: num_filters
-    type(microstats) :: mstats
-    type(filter), dimension(:), pointer :: filters
-    complex(WP), dimension(:,:,:), allocatable :: work_c, phi_in_f
-    complex(WP), dimension(:,:,:,:), allocatable :: up_in_f, uf_in_f
+    logical :: in_fft_grp
+
+    ! we use a coupler to subsample and relocate particles to the appropriate
+    ! processes within some cutoff; as a result we end up needing a second grid
+    ! for each plane; this second grid uses a processor group that is
+    ! consistent with that of fft_pg, but is larger
+    type(MPI_GROUP) :: obs_lpt_grp
+    type(pgrid) :: obs_lpt_pg
+    type(lptcoupler) :: obs_lptcpl
+    logical :: in_lpt_grp
+
+    ! these can't be shared across obsplanes because the z indices have to
+    ! match, but they can be shared across filters
+    complex(WP), dimension(:,:,:), allocatable :: work_c
     real(WP), dimension(:,:,:), allocatable :: work_r
-    real(WP), dimension(:,:,:), pointer :: phi_aln, phi, phicheck
-    real(WP), dimension(:,:,:,:), pointer :: up_aln, uf_aln, up, uf
-    ! coupler moving from sim_pg to fft_pg arrays; note no particles are moved
-    ! as the projection occurs before this step
-    type(coupler), pointer :: cpl
-    ! only used for slice io
-    type(sgrid) :: io_sg
-    type(config) :: io_cfg
-    type(MPI_GROUP) :: io_grp
-    logical :: in_io_grp
-    type(coupler), pointer :: io_cpl
+    ! even though the memory for these is the same for each obsplane, we have
+    ! to re-project for each filter
+    real(WP) :: phimean
+    real(WP), dimension(:,:,:), allocatable :: phi, phi_x
+    real(WP), dimension(:,:,:,:), allocatable :: up, uf
+
+    ! io
+    logical :: io_setup = .false.
+    logical :: write_slices = .false.
     type(npy) :: io_out
-    type(lpt) :: io_lpt
-    type(lptcoupler), pointer :: io_lptcpl
     type(partmesh) :: io_pmesh
+
   contains
-    procedure :: init => filterset_init
-    procedure :: init_filters => filterset_init_filters
-    procedure :: setup_sliceio => filterset_setup_sliceio
-    procedure :: write_sliceio => filterset_write_sliceio
-    procedure :: compute_stats => filterset_compute_stats
-    final :: filterset_destruct
-  end type filterset
+
+    procedure :: init => obsplane_init
+    procedure :: apply_filter => obsplane_apply_filter
+    procedure :: destroy => obsplane_destroy
+    !procedure :: io_setup => obsplane_io_setup
+    !procedure :: io_write => obsplane_io_write
+    !procedure :: io_destroy => obsplane_io_destroy
+
+  end type obsplane
+
+
+  !> top level xflow statistics object (interfaced with in simulation.f90)
+  type :: xflwstats
+
+    class(config), pointer :: sim_cfg
+
+    real(WP), dimension(:,:,:), pointer :: vf, rhof, visc, U, V, W
+    type(lpt), pointer :: ps
+
+    integer :: num_filters, num_planes
+    type(xdepstats) :: mstats
+    type(obsplane), dimension(:), pointer :: planes
+    type(filter), dimension(:), pointer :: filters
+    type(xplanestats), dimension(:,:), pointer :: fstats  ! num_planes by num_filters
+
+  contains
+
+    procedure :: init => xflwstats_init
+    !procedure :: setup_sliceio => xflwstats_setup_sliceio
+    !procedure :: write_sliceio => xflwstats_write_sliceio
+    procedure :: compute_xdep_stats => xflwstats_xdep_stats ! x-dependent
+    procedure :: compute_opln_stats => xflwstats_opln_stats ! observation plane
+    procedure :: destroy => xflwstats_destroy
+
+  end type xflwstats
 
 
 contains
 
 
-  ! projects particles to the aligned arrays if within the support cutoff region
-  ! computes microscopic statistics if in the micro region
-  subroutine compute_micro_stats(sim_pg, fft_pg, stats, ps, step, rhof, visc,  &
-    U, V, W, sx, sy, sz, indfield, pvelfield, fvelfield)
-    use mpi_f08, only:   mpi_allreduce, mpi_reduce, MPI_SUM, MPI_INTEGER
-    use parallel, only:  MPI_REAL_WP
-    use mathtools, only: pi
+  !> xdepstats (simple stats across xflow)
+
+  subroutine xdepstats_init(this, mkdir, g)
     implicit none
-    class(pgrid), intent(in) :: sim_pg, fft_pg
-    type(microstats), intent(inout) :: stats
-    type(lpt), intent(inout) :: ps
-    integer, intent(in) :: step
-    real(WP), dimension(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:), intent(in) :: rhof, visc, U, V, W, sx, sy, sz
-    real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:), optional, intent(out) :: indfield
-    real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:,1:), optional, intent(out) :: pvelfield, fvelfield
-    real(WP) :: dp_loc, VF_loc, taup_loc, pvol, cellvoli
-    real(WP), dimension(3) :: VB_loc, slp_loc, drg_loc, slp, drg, fvel, dxdydz
-    real(WP), dimension(6) :: VV_loc, junk
-    integer, dimension(3) :: ind, indmin, indmax
-    integer :: n
+    class(xdepstats), intent(inout) :: this
+    logical, intent(in) :: mkdir
+    class(pgrid), intent(in) :: g
+    integer :: i
 
-    ! copy over step and rho
-    stats%step = step
-    stats%rhop = ps%rho
+    allocate(this%num(g%imin:g%imax), this%vf(g%imin:g%imax),                 &
+      this%vfsq(g%imin:g%imax), this%vel(3,g%imin:g%imax),                    &
+      this%velsq(3,g%imin:g%imax), this%slp(3,g%imin:g%imax),                 &
+      this%slpsq(3,g%imin:g%imax), this%drg(3,g%imin:g%imax))
 
-    dp_loc = 0.0_WP; VF_loc = 0.0_WP; taup_loc = 0.0_WP;
-    VB_loc(:) = 0.0_WP; slp_loc(:) = 0.0_WP; drg_loc(:) = 0.0_WP;
-    VV_loc(:) = 0.0_WP;
-    if (present(indfield)) indfield(:,:,:) = 0.0_WP
-    if (present(pvelfield)) pvelfield(:,:,:,:) = 0.0_WP
-    if (present(fvelfield)) fvelfield(:,:,:,:) = 0.0_WP
+    this%globalmon = monitor(g%rank .eq. 0, 'xflw_stat_global')
+    call this%globalmon%add_column(this%step, 'step')
+    call this%globalmon%add_column(this%rhof, 'rhof')
+    call this%globalmon%add_column(this%muf,  'muf')
+    call this%globalmon%add_column(this%dp,   'dp')
+    call this%globalmon%add_column(this%ntot, 'ntot')
 
-    indmin(:) = (/ fft_pg%imin, fft_pg%jmin, fft_pg%kmin /)
-    indmax(:) = (/ fft_pg%imax, fft_pg%jmax, fft_pg%kmax /)
-    dxdydz(:) = (/ fft_pg%dx(indmin(1)), fft_pg%dy(indmin(2)),                &
-      fft_pg%dz(indmin(3)) /)
+    ! just use raw files for all the x dependent statistics
+    if (g%rank .eq. 0) then
+      if (mkdir) call execute_command_line('mkdir xflw_stat')
+      open(newunit=this%units( 1), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/num')
+      open(newunit=this%units( 2), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/vf')
+      open(newunit=this%units( 3), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/vfsq')
+      open(newunit=this%units( 4), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/velx')
+      open(newunit=this%units( 5), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/vely')
+      open(newunit=this%units( 6), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/velz')
+      open(newunit=this%units( 7), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/velsqx')
+      open(newunit=this%units( 8), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/velsqy')
+      open(newunit=this%units( 9), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/velsqz')
+      open(newunit=this%units(10), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/slpx')
+      open(newunit=this%units(11), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/slpy')
+      open(newunit=this%units(12), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/slpz')
+      open(newunit=this%units(13), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/slpsqx')
+      open(newunit=this%units(14), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/slpsqy')
+      open(newunit=this%units(15), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/slpsqz')
+      open(newunit=this%units(16), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/drgx')
+      open(newunit=this%units(17), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/drgy')
+      open(newunit=this%units(18), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/drgz')
+      do i = 1, 18
+        write(i,'(A8,*(e16.6))') ' x ', g%x(g%imin:g%imax)
+      end do
+    end if
 
-    do n = 1, ps%np_
-      ps%p(n)%ind = ps%cfg%get_ijk_global(ps%p(n)%pos, ps%p(n)%ind)
-      ind = min(max(floor(ps%p(n)%pos / dxdydz), indmin), indmax)
-      ind = fft_pg%get_ijk_global(ps%p(n)%pos, ind)
-      dp_loc = dp_loc + ps%p(n)%d
-      pvol = pi * ps%p(n)%d**3 / 6.0_WP
-      VF_loc = VF_loc + pvol
-      VB_loc = VB_loc + ps%p(n)%vel
-      VV_loc(1) = VV_loc(1) + ps%p(n)%vel(1) * ps%p(n)%vel(1)
-      VV_loc(2) = VV_loc(2) + ps%p(n)%vel(1) * ps%p(n)%vel(2)
-      VV_loc(3) = VV_loc(3) + ps%p(n)%vel(1) * ps%p(n)%vel(3)
-      VV_loc(4) = VV_loc(4) + ps%p(n)%vel(2) * ps%p(n)%vel(2)
-      VV_loc(5) = VV_loc(5) + ps%p(n)%vel(2) * ps%p(n)%vel(3)
-      VV_loc(6) = VV_loc(6) + ps%p(n)%vel(3) * ps%p(n)%vel(3)
-      fvel = ps%cfg%get_velocity(pos=ps%p(n)%pos, i0=ps%p(n)%ind(1),          &
-        j0=ps%p(n)%ind(2), k0=ps%p(n)%ind(3), U=U, V=V, W=W)
-      slp = fvel - ps%p(n)%vel
-      slp_loc = slp_loc + slp
-      call ps%get_rhs(U=U, V=V, W=W, rho=rhof, visc=visc, stress_x=sx,        &
-        stress_y=sy, stress_z=sz, p=ps%p(n), acc=drg,                         &
-        opt_dt=junk(4))
-      drg_loc = drg_loc + drg
-      taup_loc = taup_loc + sum(slp * drg) / sum(drg**2)
-      if (present(indfield)) indfield(ind(1),ind(2),ind(3)) =                 &
-        indfield(ind(1),ind(2),ind(3)) + pvol
-      if (present(pvelfield)) pvelfield(ind(1),ind(2),ind(3),:) =             &
-        pvelfield(ind(1),ind(2),ind(3),:) + pvol * ps%p(n)%vel
-      if (present(fvelfield)) fvelfield(ind(1),ind(2),ind(3),:) =             &
-        fvelfield(ind(1),ind(2),ind(3),:) + pvol * fvel
+  end subroutine xdepstats_init
+
+  subroutine xdepstats_write(this, g)
+    implicit none
+    class(xdepstats), intent(inout) :: this
+    class(pgrid), intent(in) :: g
+
+    if (g%rank .eq. 0) then
+
+      call this%globalmon%write()
+
+      write( 1,'(I8,*(e16.6))') this%step, this%num(     g%imin:g%imax)
+      write( 2,'(I8,*(e16.6))') this%step, this%vf(      g%imin:g%imax)
+      write( 3,'(I8,*(e16.6))') this%step, this%vfsq(    g%imin:g%imax)
+      write( 4,'(I8,*(e16.6))') this%step, this%vel(1,   g%imin:g%imax)
+      write( 5,'(I8,*(e16.6))') this%step, this%vel(2,   g%imin:g%imax)
+      write( 6,'(I8,*(e16.6))') this%step, this%vel(3,   g%imin:g%imax)
+      write( 7,'(I8,*(e16.6))') this%step, this%velsq(1, g%imin:g%imax)
+      write( 8,'(I8,*(e16.6))') this%step, this%velsq(2, g%imin:g%imax)
+      write( 9,'(I8,*(e16.6))') this%step, this%velsq(3, g%imin:g%imax)
+      write(10,'(I8,*(e16.6))') this%step, this%slp(1,   g%imin:g%imax)
+      write(11,'(I8,*(e16.6))') this%step, this%slp(2,   g%imin:g%imax)
+      write(12,'(I8,*(e16.6))') this%step, this%slp(3,   g%imin:g%imax)
+      write(13,'(I8,*(e16.6))') this%step, this%slpsq(1, g%imin:g%imax)
+      write(14,'(I8,*(e16.6))') this%step, this%slpsq(2, g%imin:g%imax)
+      write(15,'(I8,*(e16.6))') this%step, this%slpsq(3, g%imin:g%imax)
+      write(16,'(I8,*(e16.6))') this%step, this%drg(1,   g%imin:g%imax)
+      write(17,'(I8,*(e16.6))') this%step, this%drg(2,   g%imin:g%imax)
+      write(18,'(I8,*(e16.6))') this%step, this%drg(3,   g%imin:g%imax)
+
+    end if
+
+  end subroutine xdepstats_write
+
+  subroutine xdepstats_destroy(this)
+    implicit none
+    type(xdepstats), intent(inout) :: this
+    integer :: i
+
+    ! monitor falls out of scope and has its own destructor
+
+    do i = 1, 18
+      close(unit=this%units(i))
     end do
-    cellvoli = fft_pg%nx * fft_pg%ny * fft_pg%nz / fft_pg%vol_total
-    if (present(indfield)) indfield = indfield * cellvoli
-    if (present(pvelfield)) pvelfield = pvelfield * cellvoli
-    if (present(fvelfield)) fvelfield = fvelfield * cellvoli
-    call mpi_allreduce(ps%np_,   stats%Np,   1, MPI_INTEGER, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(dp_loc,   stats%dp,   1, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(VF_loc,   stats%VF,   1, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(taup_loc, stats%taup, 1, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(VB_loc,   stats%VB,   3, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(slp_loc,  stats%slp,  3, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(drg_loc,  stats%drg,  3, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    call mpi_allreduce(VV_loc,   stats%VV,   6, MPI_REAL_WP, MPI_SUM, sim_pg%comm)
-    stats%dp = stats%dp / stats%Np; stats%VF = stats%VF / sim_pg%vol_total;
-    stats%taup = stats%taup / stats%Np; stats%VB = stats%VB / stats%Np;
-    stats%slp = stats%slp / stats%Np; stats%drg = stats%drg / stats%Np;
-    stats%VV = stats%VV / stats%Np;
 
-    call stats%mon%write()
+    deallocate(this%num, this%vf, this%vfsq, this%vel, this%velsq, this%slp,  &
+      this%slpsq, this%drg)
 
-  end subroutine compute_micro_stats
+  end subroutine xdepstats_destroy
 
 
-  !> filter objects
+  !> macroscopic statistics object
 
+  subroutine xplanestats_init(this, amroot)
+    implicit none
+    class(xplanestats), intent(inout) :: this
+    logical, intent(in) :: amroot
+
+    this%mon = monitor(amroot, this%out_fname)
+    call this%mon%add_column(this%step,     'step')
+    call this%mon%add_column(this%PB,       'PB')
+    call this%mon%add_column(this%PC2,      'PC2')
+    call this%mon%add_column(this%UB(1),    'UBx')
+    call this%mon%add_column(this%UB(2),    'UBy')
+    call this%mon%add_column(this%UB(3),    'UBz')
+    call this%mon%add_column(this%SB(1),    'SBx')
+    call this%mon%add_column(this%SB(2),    'SBy')
+    call this%mon%add_column(this%SB(3),    'SBz')
+    call this%mon%add_column(this%PCUB(1),  'PCUBx')
+    call this%mon%add_column(this%PCUB(2),  'PCUBy')
+    call this%mon%add_column(this%PCUB(3),  'PCUBz')
+    call this%mon%add_column(this%UBPCG(1), 'UBPCGx')
+    call this%mon%add_column(this%UBPCG(2), 'UBPCGy')
+    call this%mon%add_column(this%UBPCG(3), 'UBPCGz')
+    call this%mon%add_column(this%UC2(1,1), 'UC2xx')
+    call this%mon%add_column(this%UC2(1,2), 'UC2xy')
+    call this%mon%add_column(this%UC2(1,3), 'UC2xz')
+    call this%mon%add_column(this%UC2(2,2), 'UC2yy')
+    call this%mon%add_column(this%UC2(2,3), 'UC2yz')
+    call this%mon%add_column(this%UC2(3,3), 'UC2zz')
+
+  end subroutine xplanestats_init
+
+  subroutine xplanestats_write(this)
+    implicit none
+    class(xplanestats), intent(inout) :: this
+
+    call this%mon%write()
+
+  end subroutine xplanestats_write
+
+  subroutine xplanestats_destroy(this)
+    implicit none
+    type(xplanestats), intent(inout) :: this
+
+    ! nothing to do (monitor falls out of scope and has its own destructor)
+
+  end subroutine xplanestats_destroy
+
+
+  !> filter object
+
+  ! assumes filtername, params, and type are already set
   subroutine filter_init(this, fft)
     use mpi_f08, only:   mpi_allreduce, MPI_SUM
     use parallel, only:  MPI_REAL_WP
@@ -204,39 +344,34 @@ contains
     real(WP) :: flt_int_l, flt_int_g
 
     ! allocate Fourier space filter
-    allocate(this%flt_f(fft%pg%imin_:fft%pg%imax_,fft%pg%jmin_:fft%pg%jmax_,  &
-      fft%pg%kmin_:fft%pg%kmax_))
+    allocate(this%flt_f(fft%pg%imin_:fft%pg%imin_,fft%pg%jmin_:fft%pg%jmax_,  &
+      fft%pg%kmin_:fft%pg%kmax_))   !       ^^^^^ not a typo
 
     ! fill real filter; we build fft%pg such that the corner is at origin
     select case (this%type)
     case (FLT_GAUSSIAN)
       init_gaussian: block
-        real(WP) :: b, r2_z, r2_y, r2_x, xoff, yoff, zoff
-        integer :: i, j, k, ishift, jshift, kshift
+        real(WP) :: b, r2_z, r2_y, yoff, zoff
+        integer :: j, k, jshift, kshift
         this%flt_f(:,:,:) = (0.0_WP, 0.0_WP)
         b = -6.0_WP / this%params(1)**2
-        do ishift = -2, 2
-          xoff = ishift * fft%pg%xL
-          do jshift = -2, 2
-            yoff = jshift * fft%pg%yL
-            do kshift = -2, 2
-              zoff = kshift * fft%pg%zL
-              do k = fft%pg%kmin_, fft%pg%kmax_
-                r2_z = (fft%pg%zm(k) + zoff)**2
-                do j = fft%pg%jmin_, fft%pg%jmax_
-                  r2_y = (fft%pg%ym(j) + yoff)**2
-                  do i = fft%pg%imin_, fft%pg%imax_
-                    r2_x = (fft%pg%xm(i) + xoff)**2
-                    this%flt_f(i,j,k) = this%flt_f(i,j,k) + exp(b * (r2_z + r2_y + r2_x))
-                  end do
-                end do
+        do jshift = -2, 2
+          yoff = jshift * fft%pg%yL
+          do kshift = -2, 2
+            zoff = kshift * fft%pg%zL
+            do k = fft%pg%kmin_, fft%pg%kmax_
+              r2_z = (fft%pg%zm(k) + zoff)**2
+              do j = fft%pg%jmin_, fft%pg%jmax_
+                r2_y = (fft%pg%ym(j) + yoff)**2
+                this%flt_f(fft%pg%imin_,j,k) = this%flt_f(fft%pg%imin_,j,k) + &
+                  exp(b * (r2_z + r2_y))
               end do
             end do
           end do
         end do
       end block init_gaussian
     case default
-      call die("[filterset] invalid filter type")
+      call die("[xflwstats] invalid filter type")
     end select
 
     ! normalize filter
@@ -246,302 +381,354 @@ contains
     this%flt_f = this%flt_f / flt_int_g
 
     ! transform filter
-    call fft%xtransform_forward(this%flt_f)
     call fft%ytransform_forward(this%flt_f)
     call fft%ztransform_forward(this%flt_f)
+    ! this shouldn't be necessary since we normalized in real space, but
+    ! whatever
     if (fft%oddball) this%flt_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_) =     &
       (1.0_WP, 0.0_WP)
 
-    this%fstats%out_fname = this%filtername
-    call this%fstats%init(fft%pg%amroot)
-
   end subroutine filter_init
 
-  subroutine filter_destruct(this)
+  subroutine filter_destroy(this)
     implicit none
     type(filter), intent(inout) :: this
 
-    ! nothing to do
+    deallocate(this%flt_f)
 
-  end subroutine filter_destruct
-
-
-  !> macroscopic statistics
-
-  subroutine xflwstats_init_mon(this, amroot)
-    implicit none
-    class(xflwstats_cube), intent(inout) :: this
-    logical, intent(in) :: amroot
-
-    this%mon = monitor(amroot, this%out_fname)
-    call this%mon%add_column(this%step,      'step')
-    call this%mon%add_column(this%PB,        'PB')
-    call this%mon%add_column(this%PC2,       'PC2')
-    call this%mon%add_column(this%UB(1),     'UBx')
-    call this%mon%add_column(this%UB(2),     'UBy')
-    call this%mon%add_column(this%UB(3),     'UBz')
-    call this%mon%add_column(this%SB(1),     'SBx')
-    call this%mon%add_column(this%SB(2),     'SBy')
-    call this%mon%add_column(this%SB(3),     'SBz')
-    call this%mon%add_column(this%PCUB(1),   'PCUBx')
-    call this%mon%add_column(this%PCUB(2),   'PCUBy')
-    call this%mon%add_column(this%PCUB(3),   'PCUBz')
-    call this%mon%add_column(this%UBPCG(1),  'UBPCGx')
-    call this%mon%add_column(this%UBPCG(2),  'UBPCGy')
-    call this%mon%add_column(this%UBPCG(3),  'UBPCGz')
-    call this%mon%add_column(this%UBPCG(3),  'UBPCGz')
-    call this%mon%add_column(this%UC2(1,1), 'UC2xx')
-    call this%mon%add_column(this%UC2(1,2), 'UC2xy')
-    call this%mon%add_column(this%UC2(1,3), 'UC2xz')
-    call this%mon%add_column(this%UC2(2,2), 'UC2yy')
-    call this%mon%add_column(this%UC2(2,3), 'UC2yz')
-    call this%mon%add_column(this%UC2(3,3), 'UC2zz')
-
-  end subroutine xflwstats_init_mon
-
-  subroutine xflwstats_destroy_mon(this)
-    implicit none
-    type(xflwstats_cube), intent(inout) :: this
-
-    ! nothing to do
-
-  end subroutine xflwstats_destroy_mon
-
-  subroutine filter_ffts_forward(fft, phi, up, uf, phi_in_f, up_in_f, uf_in_f)
-    implicit none
-    type(cfourier), intent(inout) :: fft
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(in) :: phi
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:), intent(in) :: up, uf
-    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(out) :: phi_in_f
-    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:), intent(out) :: up_in_f, uf_in_f
-    integer :: n
-
-    phi_in_f(:,:,:) = phi(:,:,:)
-    call fft%xtransform_forward(phi_in_f)
-    call fft%ytransform_forward(phi_in_f)
-    call fft%ztransform_forward(phi_in_f)
-
-    do n = 1, 3
-      up_in_f(:,:,:,n) = up(:,:,:,n)
-      call fft%xtransform_forward(up_in_f(:,:,:,n))
-      call fft%ytransform_forward(up_in_f(:,:,:,n))
-      call fft%ztransform_forward(up_in_f(:,:,:,n))
-      uf_in_f(:,:,:,n) = uf(:,:,:,n)
-      call fft%xtransform_forward(uf_in_f(:,:,:,n))
-      call fft%ytransform_forward(uf_in_f(:,:,:,n))
-      call fft%ztransform_forward(uf_in_f(:,:,:,n))
-      if (fft%oddball) then
-        ! we make the decision here to fix the particle velocity at zero and
-        ! allow the fluid velocity to have nonzero velocity so that computing
-        ! the Reynolds stress terms is easy
-        uf_in_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_,n) =                   &
-          uf_in_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_,n) -                 &
-          up_in_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_,n)
-        up_in_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_,n) =                   &
-          (0.0_WP, 0.0_WP)
-      end if
-    end do
-
-  end subroutine filter_ffts_forward
-
-  ! leaving this function, phi, phicheck, up, uf contain the appropriate
-  ! (filtered) quantities
-  subroutine compute_filter_stats(stats, fft, flt, step, phi_in_f,       &
-    up_in_f, uf_in_f, phi, phicheck, up, uf, work_r, work_c)
-    use mpi_f08, only:  mpi_allreduce, MPI_SUM
-    use parallel, only: MPI_REAL_WP
-    implicit none
-    type(xflwstats_cube), intent(inout) :: stats
-    type(cfourier), intent(inout) :: fft
-    type(filter), intent(in) :: flt
-    integer, intent(in) :: step
-    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(in) :: phi_in_f
-    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:), intent(in) :: up_in_f, uf_in_f
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(out) :: phi, phicheck, work_r
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:), intent(out) :: up, uf
-    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:), intent(out) :: work_c
-    real(WP) :: PB_loc, PC2_loc
-    real(WP), dimension(3) :: UB_loc, SB_loc, PCUB_loc, UBPCG_loc
-    real(WP), dimension(3,3) :: UC2_loc
-    integer :: i, j, k, n, m, N3, ierr
-
-    N3 = fft%pg%nx * fft%pg%ny * fft%pg%nz
-
-    ! copy over step
-    stats%step = step
-
-    ! convolve and compute backward transform
-    work_c(:,:,:) = phi_in_f(:,:,:) * flt%flt_f(:,:,:)
-    call fft%xtransform_backward(work_c)
-    call fft%ytransform_backward(work_c)
-    call fft%ztransform_backward(work_c)
-    phi = realpart(work_c)
-    do n = 1, 3
-      work_c(:,:,:) = up_in_f(:,:,:,n) * flt%flt_f(:,:,:)
-      call fft%ztransform_backward(work_c)
-      call fft%ytransform_backward(work_c)
-      call fft%xtransform_backward(work_c)
-      up(:,:,:,n) = realpart(work_c)
-      work_c(:,:,:) = uf_in_f(:,:,:,n) * flt%flt_f(:,:,:)
-      call fft%ztransform_backward(work_c)
-      call fft%ytransform_backward(work_c)
-      call fft%xtransform_backward(work_c)
-      uf(:,:,:,n) = realpart(work_c)
-    end do
-
-    ! compute PB
-    PB_loc = sum(phi)
-    call mpi_allreduce(PB_loc, stats%PB, 1, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
-    stats%PB = stats%PB / N3
-
-    ! compute UB
-    !TODO this will be exactly zero from above; remove this and make sure the correct value is output to monitor files elsewhere
-    do n = 1, 3; UB_loc(n) = sum(up(:,:,:,n)); end do
-    call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
-    stats%UB = stats%UB / N3
-
-    ! compute Reynolds-stress-type terms
-    UC2_loc(n,m) = 0.0_WP
-    do n = 1, 3
-      do m = n, 3
-        work_r = up(:,:,:,n) * up(:,:,:,m)
-        UC2_loc(n,m) = sum(work_r)
-      end do
-    end do
-    call mpi_allreduce(UC2_loc, stats%UC2, 9, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
-    stats%UC2 = stats%UC2 / N3
-
-    ! compute SB
-    do n = 1, 3
-      work_r = uf(:,:,:,n) - up(:,:,:,n)
-      SB_loc(n) = sum(work_r)
-    end do
-    call mpi_allreduce(SB_loc, stats%SB, 3, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
-    stats%SB = stats%SB / N3
-
-    ! compute PC, PC2
-    phicheck = phi - stats%PB
-    work_r = phicheck**2
-    PC2_loc = sum(work_r)
-    call mpi_allreduce(PC2_loc, stats%PC2, 1, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
-    stats%PC2 = stats%PC2 / N3
-
-    ! compute PCUB
-    do n = 1, 3
-      work_r = phicheck * up(:,:,:,n)
-      PCUB_loc(n) = sum(work_r)
-    end do
-    call mpi_allreduce(PCUB_loc, stats%PCUB, 3, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
-    stats%PCUB = stats%PCUB / N3
-
-    ! take gradients and compute UBPCG
-    ! (the gradient of phi and phicheck is the same for HIT, but since we have
-    ! phi check we will use it)
-    ! x direction
-    do k = fft%pg%kmin_, fft%pg%kmax_
-      do j = fft%pg%jmin_, fft%pg%jmax_
-        work_c(:,j,k) = im * fft%kx(:) * phicheck(:,j,k)
-      end do
-    end do
-    call fft%ztransform_backward(work_c)
-    call fft%ytransform_backward(work_c)
-    call fft%xtransform_backward(work_c)
-    UBPCG_loc(1) = sum(up(:,:,:,1) * realpart(work_c))
-    ! y direction
-    do k = fft%pg%kmin_, fft%pg%kmax_
-      do i = fft%pg%imin_, fft%pg%imax_
-        work_c(i,:,k) = im * fft%ky(:) * phicheck(i,:,k)
-      end do
-    end do
-    call fft%ztransform_backward(work_c)
-    call fft%ytransform_backward(work_c)
-    call fft%xtransform_backward(work_c)
-    UBPCG_loc(2) = sum(up(:,:,:,2) * realpart(work_c))
-    ! z direction
-    do j = fft%pg%jmin_, fft%pg%jmax_
-      do i = fft%pg%imin_, fft%pg%imax_
-        work_c(i,j,:) = im * fft%kz(:) * phicheck(i,j,:)
-      end do
-    end do
-    call fft%ztransform_backward(work_c)
-    call fft%ytransform_backward(work_c)
-    call fft%xtransform_backward(work_c)
-    UBPCG_loc(3) = sum(up(:,:,:,3) * realpart(work_c))
-    call mpi_allreduce(UBPCG_loc, stats%UBPCG, 3, MPI_REAL_WP, MPI_SUM,     &
-      fft%pg%comm)
-    stats%UBPCG = stats%UBPCG / N3
-
-    ! write
-    call stats%mon%write()
-
-  end subroutine compute_filter_stats
+  end subroutine filter_destroy
 
 
-  !> filterset
+  !> observation plane
 
-  subroutine filterset_init(this, sim_pg, filterfile, FFTN, rhof, visc, U, V, W, sx, sy, sz, ps)
-    use param,       only: param_read
-    use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
-      MPI_LOGICAL, MPI_COMM_WORLD
-    use parallel,    only: MPI_REAL_WP, GROUP
+  subroutine build_slice_pg(sim_pg, N, offset, width, obs_pg, obs_grp, in_grp)
+    use mpi_f08, only: mpi_allreduce, MPI_LOGICAL, MPI_LOR, mpi_group_range_incl
     use sgrid_class, only: cartesian
-    use messager,    only: die
+    use messager, only: die
     implicit none
-    class(filterset), intent(inout) :: this
-    class(pgrid), target, intent(in) :: sim_pg
-    character(len=str_medium), intent(in) :: filterfile
-    integer, dimension(3), intent(in) :: FFTN
-    type(lpt), target, intent(in) :: ps
-    real(WP), intent(in), target ::                                           &
-      rhof(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                     &
-      visc(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                     &
-      U(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
-      V(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
-      W(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
-      sx(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                       &
-      sy(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                       &
-      sz(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:)
+    class(pgrid), intent(in) :: sim_pg
+    integer, dimension(3) :: N
+    real(WP), intent(in) :: offset, width
+    type(pgrid), intent(out) :: obs_pg
+    type(MPI_GROUP), intent(out) :: obs_grp
+    logical, intent(out) :: in_grp
     real(WP), dimension(3) :: dx
-    real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
-    type(filter_info_row) :: f_info_raw
-    integer :: li, hi, lj, hj, lk, hk, i, fh, ierr
-    logical :: use_slice_io, use_slice_xz_io
+    integer, dimension(3,sim_pg%nproc) :: ranges
+    logical, dimension(sim_pg%nproc) :: in_group_loc, in_group
+    type(sgrid) :: obs_sg
+    integer :: i, j, k, ierr
+    logical :: prev
+    real(WP), dimension(:), allocatable :: xs, ys, zs
 
-    ! store pointer to simulation config and data
-    this%sim_pg => sim_pg; this%ps => ps;
-    this%rhof => rhof; this%visc => visc;
-    this%U => U; this%V => V; this%W => W;
-    this%sx => sx; this%sy => sy; this%sz => sz;
+    ! check plane is one cell wide and allocate xs, ys, zs arrays
+    if (N(1) .ne. 1) call die("Observation plane must be one cell wide.")
+    allocate(xs(N(1)+1), ys(N(2)+1), zs(N(3)+1))
 
-    ! set up microscopic statistics
-    this%mstats%out_fname = 'microstats'
-    call this%mstats%init(sim_pg%amroot)
+    ! build sgrid and find overlapping processes
+    dx(:) = (/ width, sim_pg%yL, sim_pg%zL /) / N(:)
+    do i = 1, N(1) + 1; xs(i) = (real(i,WP) - 1.0_WP) * dx(1); end do;
+    do i = 1, N(2) + 1; ys(i) = (real(i,WP) - 1.0_WP) * dx(2); end do;
+    do i = 1, N(3) + 1; zs(i) = (real(i,WP) - 1.0_WP) * dx(3); end do;
+    xs(:) = xs(:) + offset - 0.5_WP * width
+    ys(:) = ys(:) + sim_pg%y(sim_pg%jmin)
+    zs(:) = zs(:) + sim_pg%z(sim_pg%kmin)
+    obs_sg = sgrid(coord=cartesian, no=0, x=xs, y=ys, z=zs,                   &
+      xper=.true., yper=.true., zper=.true., name='XF_OBS_SG')
+    in_group_loc(:) = .false.
+    in_group_loc(sim_pg%rank+1) =                                             &
+      offset + 0.5_WP * width .gt. sim_pg%x(sim_pg%imin_) .and.               &
+      offset - 0.5_WP * width .lt. sim_pg%x(sim_pg%imax_+1)
+    call mpi_allreduce(in_group_loc, in_group, sim_pg%nproc,                  &
+      MPI_LOGICAL, MPI_LOR, sim_pg%comm, ierr)
 
-    ! setup ffts (they need their own, much finer, pgrid)
-    dx(:) = (/ sim_pg%xL, sim_pg%yL, sim_pg%zL /) / FFTN
-    allocate(fftxs(FFTN(1)+1), fftys(FFTN(2)+1), fftzs(FFTN(3)+1))
-    do i = 1, FFTN(1) + 1; fftxs(i) = real(i-1,WP) * dx(1); end do;
-    do i = 1, FFTN(2) + 1; fftys(i) = real(i-1,WP) * dx(2); end do;
-    do i = 1, FFTN(3) + 1; fftzs(i) = real(i-1,WP) * dx(3); end do;
-    this%fft_sg = sgrid(coord=cartesian, no=0, x=fftxs, y=fftys, z=fftzs,     &
-      xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
-    this%fft_pg = pgrid(this%fft_sg, GROUP, (/ sim_pg%npx, sim_pg%npy,        &
-      sim_pg%npz /))
+    ! build the processor group
+    if (in_group(1)) then; k = 1; else; k = 0; end if;
+    do i = 2, sim_pg%nproc
+      if (in_group(i) .and. .not. in_group(i-1)) k = k + 1
+    end do
+    j = 0
+    prev = .false.
+    do i = 1, sim_pg%nproc
+      if (in_group(i) .and. .not. prev) then
+        j = j + 1
+        ranges(1,j) = i - 1
+      end if
+      if (.not. in_group(i) .and. prev) then
+        ranges(2,j) = i - 2
+      end if
+      prev = in_group(i)
+    end do
+    if (prev) ranges(2,j) = sim_pg%nproc - 1
+    ranges(3,:) = 1
+    if (j .ne. k) call die("[XS] error determining obs plane group")
+    call mpi_group_range_incl(sim_pg%group, k, ranges(1:3,1:k), obs_grp, ierr)
+    in_grp = in_group(sim_pg%rank+1)
+
+    ! set up pgrid
+    obs_pg = pgrid(obs_sg, obs_grp, N)
+
+    ! free memory
+    deallocate(xs, ys, zs)
+
+  end subroutine build_slice_pg
+
+  subroutine obsplane_init(this, sim_cfg, FFTN, ps, offset, fft_width, lpt_width)
+    use messager, only: die
+    use mpi_f08, only: mpi_allreduce, MPI_LOGICAL, MPI_LOR, mpi_group_range_incl
+    use sgrid_class, only: cartesian
+    implicit none
+    class(obsplane), intent(inout) :: this
+    class(config), target, intent(in) :: sim_cfg
+    integer, dimension(3), intent(in) :: FFTN
+    class(lpt), target, intent(in) :: ps            ! lpt with xflow particles
+    real(WP), intent(in) :: offset, fft_width, lpt_width
+    integer :: li, hi, lj, hj, lk, hk
+
+    ! set basic properties
+    this%sim_cfg => sim_cfg
+    this%offset = offset
+    write(this%label, '(A,F10.6)') 'obsplane_', offset
+
+    ! set up lpt slice
+    call build_slice_pg(sim_cfg, FFTN, offset, lpt_width, this%obs_lpt_pg,    &
+      this%obs_lpt_grp, this%in_lpt_grp)
+
+    ! set up fft slice
+    call build_slice_pg(sim_cfg, FFTN, offset, fft_width, this%fft_pg,        &
+      this%fft_grp, this%in_fft_grp)
+
+    ! set up fft
     allocate(this%fft, source=cfourier(this%fft_pg))
+
+    ! setup particle holder for projection onto plane and particle coupler
+    this%obs_lptcpl = lptcoupler(src_grp=sim_cfg%group,                       &
+      dst_grp=this%obs_lpt_grp, name='OBS_LPT_CPL')
+    call this%obs_lptcpl%set_src(ps)
+    if (this%in_lpt_grp) call this%obs_lptcpl%set_dst(this%obs_lpt_pg)
+    call this%obs_lptcpl%initialize()
 
     ! allocate arrays
     li = this%fft_pg%imin_; lj = this%fft_pg%jmin_; lk = this%fft_pg%kmin_;
     hi = this%fft_pg%imax_; hj = this%fft_pg%jmax_; hk = this%fft_pg%kmax_;
-    allocate(this%work_r(li:hi,lj:hj,lk:hk), this%work_c(li:hi,lj:hj,lk:hk),  &
-      this%phi_in_f(li:hi,lj:hj,lk:hk), this%up_in_f(li:hi,lj:hj,lk:hk,3),    &
-      this%uf_in_f(li:hi,lj:hj,lk:hk,3), this%phi(li:hi,lj:hj,lk:hk),         &
-      this%phicheck(li:hi, lj:hj, lk:hk), this%up(li:hi,lj:hj,lk:hk,3),       &
-      this%uf(li:hi,lj:hj,lk:hk,3))
+    allocate(this%work_c(li:hi,lj:hj,lk:hk), this%work_r(li:hi,lj:hj,lk:hk),  &
+      this%phi(li:hi,lj:hj,lk:hk), this%phi_x(li:hi,lj:hj,lk:hk),             &
+      this%up(li:hi,lj:hj,lk:hk,3), this%uf(li:hi,lj:hj,lk:hk,3))
+
+  end subroutine obsplane_init
+
+  ! assumes obs_lpt is up to date
+  ! U, V, W, Ux, Vx, Wx are from flow solver and on flow solver pgrid
+  subroutine obsplane_apply_filter(this, flt, ps, U, V, W, Ux, Vx, Wx)
+    use mpi_f08, only: mpi_allreduce, MPI_SUM
+    use parallel, only: MPI_REAL_WP
+    use lpt_class, only: part
+    use mathtools, only: pi
+    implicit none
+    class(obsplane), intent(inout) :: this
+    type(filter), intent(in) :: flt
+    type(part), dimension(:), intent(inout) :: ps
+    real(WP), dimension(this%sim_cfg%imin_:,this%sim_cfg%jmin_:,              &
+      this%sim_cfg%kmin_:), intent(in) :: U, V, W, Ux, Vx, Wx
+    integer :: n, i, j, k
+    integer, dimension(3) :: ind, dom_n, dom_imin
+    real(WP), dimension(3) :: fvel, dom_c, dom_d
+    real(WP) :: b, cellvoli, dx, pvol
+
+    if (.not. this%in_grp) return
+
+    ! project particles 
+    this%phi(:,:,:) = 0.0_WP; this%phi_x(:,:,:) = 0.0_WP;
+    this%up(:,:,:,:) = 0.0_WP; this%uf(:,:,:,:) = 0.0_WP;
+    dom_c = (/ this%fft_pg%x(this%fft_pg%imin),                               &
+      this%fft_pg%y(this%fft_pg%jmin), this%fft_pg%z(this%fft_pg%kmin) /)
+    dom_n = (/ this%fft_pg%nx, this%fft_pg%ny, this%fft_pg%nz /)
+    dom_d = (/ this%fft_pg%xL, this%fft_pg%yL, this%fft_pg%zL /) / dom_n
+    dom_imin = (/ this%fft_pg%imin, this%fft_pg%jmin, this%fft_pg%kmin /)
+    do n = 1, size(ps)
+      pvol = pi * ps(n)%d**3 / 6.0_WP
+      ps(n)%ind = this%sim_cfg%get_ijk_global(ps(n)%pos, ps(n)%ind)
+      fvel = this%sim_cfg%get_velocity(pos=ps(n)%pos, i0=ps(n)%ind(1),         &
+        j0=ps(n)%ind(2), k0=ps(n)%ind(3), U=U, V=V, W=W)
+      ind = int((ps(n)%pos - dom_c) / dom_d) + dom_imin
+      ind(:) = this%fft_pg%get_ijk_global(ps(n)%pos, ind)
+      ind(1) = this%fft_pg%imin_
+      dx = ps(n)%pos(1) - this%offset
+      b = -6.0_WP / flt%params(1)**2
+      this%phi(i,j,k) = this%phi(i,j,k) + pvol * exp(b * dx**2)
+      this%phi_x(i,j,k) = this%phi_x(i,j,k) +                                 &
+        2 * b * dx * pvol * exp(b * dx**2)
+      this%up(i,j,k,:) = this%up(i,j,k,:) +                                   &
+        ps(n)%vel * pvol * exp(b * dx**2)
+      this%uf(i,j,k,:) = this%uf(i,j,k,:) + fvel * pvol * exp(b * dx**2)
+    end do
+
+    ! normalize phi
+    cellvoli = this%fft_pg%nx * this%fft_pg%ny * this%fft_pg%nz /             &
+      this%fft_pg%vol_total
+    this%phi(:,:,:) = cellvoli * this%phi(:,:,:)
+    b = sum(this%phi(this%fft_pg%imin_:this%fft_pg%imax_,                     &
+                     this%fft_pg%jmin_:this%fft_pg%jmax_,                     &
+                     this%fft_pg%kmin_:this%fft_pg%kmax_))
+    call mpi_allreduce(b, this%phimean, 1, MPI_REAL_WP, MPI_SUM,              &
+      this%fft_pg%comm)
+    this%phimean = this%phimean / (this%fft_pg%nx * this%fft_pg%ny *          &
+      this%fft_pg%nz)
+    this%phi(:,:,:) = this%phi(:,:,:) - this%phimean
+
+    ! filter in normal directions
+    this%work_c(:,:,:) = this%phi(:,:,:)
+    call this%fft%ytransform_forward(this%work_c(:,:,:))
+    call this%fft%ztransform_forward(this%work_c(:,:,:))
+    this%work_c(:,:,:) = this%work_c(:,:,:) * flt%flt_f(:,:,:)
+    call this%fft%ztransform_backward(this%work_c(:,:,:))
+    call this%fft%ytransform_backward(this%work_c(:,:,:))
+    this%phi(:,:,:) = real(this%work_c(:,:,:), WP)
+    this%work_c(:,:,:) = cellvoli * this%phi_x(:,:,:)
+    call this%fft%ytransform_forward(this%work_c(:,:,:))
+    call this%fft%ztransform_forward(this%work_c(:,:,:))
+    this%work_c(:,:,:) = this%work_c(:,:,:) * flt%flt_f(:,:,:)
+    call this%fft%ztransform_backward(this%work_c(:,:,:))
+    call this%fft%ytransform_backward(this%work_c(:,:,:))
+    this%phi_x(:,:,:) = real(this%work_c(:,:,:), WP)
+    do n = 1, 3
+      this%work_c(:,:,:) = cellvoli * this%up(:,:,:,n)
+      call this%fft%ytransform_forward(this%work_c(:,:,:))
+      call this%fft%ztransform_forward(this%work_c(:,:,:))
+      this%work_c(:,:,:) = this%work_c(:,:,:) * flt%flt_f(:,:,:)
+      call this%fft%ztransform_backward(this%work_c(:,:,:))
+      call this%fft%ytransform_backward(this%work_c(:,:,:))
+      this%up(:,:,:,n) = real(this%work_c(:,:,:), WP)
+      this%work_c(:,:,:) = cellvoli * this%uf(:,:,:,n)
+      call this%fft%ytransform_forward(this%work_c(:,:,:))
+      call this%fft%ztransform_forward(this%work_c(:,:,:))
+      this%work_c(:,:,:) = this%work_c(:,:,:) * flt%flt_f(:,:,:)
+      call this%fft%ztransform_backward(this%work_c(:,:,:))
+      call this%fft%ytransform_backward(this%work_c(:,:,:))
+      this%uf(:,:,:,n) = real(this%work_c(:,:,:), WP)
+    end do
+
+  end subroutine obsplane_apply_filter
+
+  subroutine obsplane_destroy(this)
+    implicit none
+    class(obsplane), intent(inout) :: this
+
+    deallocate(this%fft, this%work_c, this%work_r, this%phi, this%phi_x,      &
+      this%up, this%uf)
+
+    !TODO enable this once written
+    !if (this%io_setup) call this%io_destroy()
+
+  end subroutine obsplane_destroy
+
+  !TODO this method hasn't been touched since being pulled from the cube
+  !TODO this is actually not necessary/much easier, since we already have a single obsplane, we just need to write them out if the
+  !flag is switched
+  !TODO however, note that this is filter dependent, and must be set up for each filter
+  !subroutine obsplane_io_setup(this)
+  !  use mpi_f08    !,  only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR,           &
+  !    !mpi_allreduce, mpi_bcast
+  !  use parallel, only: MPI_REAL_WP
+  !  use param,    only: param_read
+  !  use messager, only: die
+  !  use sgrid_class, only: cartesian
+  !  implicit none
+  !  class(obsplane), intent(inout) :: this
+  !  type(filter), pointer :: flt
+  !  integer :: n, li, hi, lj, hj, lk, hk, i, j, ierr
+  !  real(WP), dimension(:,:,:), pointer :: vx, vy, vz
+  !  real(WP) :: thickness, height
+  !  real(WP), dimension(2) :: z
+  !  integer, dimension(3) :: partition
+  !  logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group
+  !  integer, dimension(3,this%sim_pg%nproc) :: ranges
+  !  logical :: prev
+
+  !  if (.not. this%in_grp) return
+
+  !  this%io_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
+  !  this%io_pmesh%varname(1) = "id"
+  !  this%io_pmesh%varname(2) = "dp"
+  !  this%io_pmesh%vecname(1) = "vel"
+  !  this%io_pmesh%vecname(2) = "fld"
+  !  this%io_out = npy(pg=this%obs_lpt_pg, folder='obsvis'//this%label)
+  !  call this%io_out%add_particle('partslice', this%io_pmesh)
+
+  !  ! set up output scalars for each interesting filter quantity
+  !  !TODO
+  !  do n = 1, this%num_filters
+  !    flt => this%filters(n)
+  !    if (.not. flt%use_slice_io .or. .not. this%in_io_grp) cycle
+  !    li = this%io_cfg%imino_; hi = this%io_cfg%imaxo_;
+  !    lj = this%io_cfg%jmino_; hj = this%io_cfg%jmaxo_;
+  !    lk = this%io_cfg%kmino_; hk = this%io_cfg%kmaxo_;
+  !    allocate(flt%io_phi(li:hi,lj:hj,lk:hk),                                &
+  !      flt%io_up(li:hi,lj:hj,lk:hk,3), flt%io_uf(li:hi,lj:hj,lk:hk,3))
+  !    call this%io_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_phi)
+  !    vx => flt%io_up(:,:,:,1); vy => flt%io_up(:,:,:,2); vz => flt%io_up(:,:,:,3);
+  !    call this%io_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
+  !    vx => flt%io_uf(:,:,:,1); vy => flt%io_uf(:,:,:,2); vz => flt%io_uf(:,:,:,3);
+  !    call this%io_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
+  !  end do
+
+  !end subroutine obsplane_io_setup
+
+  !!TODO this method hasn't been touched since being pulled from the cube
+  !subroutine obsplane_io_write(this, t)
+  !  implicit none
+  !  class(xflwstats), intent(inout) :: this
+  !  real(WP), intent(in) :: t
+
+  !  if (this%in_io_grp) call this%io_out%write_data(t)
+
+  !end subroutine obsplane_io_write
+
+  !TODO obsplane_io_destroy
+
+
+  !> xflwstats
+
+  subroutine xflwstats_init(this, sim_cfg, filterfile, FFTN, vf, rhof, visc, U, V, W, ps)
+    use param,       only: param_read
+    use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
+      MPI_LOGICAL, MPI_COMM_WORLD
+    use parallel,    only: MPI_REAL_WP
+    use sgrid_class, only: cartesian
+    use messager,    only: die
+    implicit none
+    class(xflwstats), intent(inout) :: this
+    class(config), target, intent(in) :: sim_cfg
+    character(len=str_medium), intent(in) :: filterfile
+    integer, dimension(2), intent(in) :: FFTN
+    type(lpt), target, intent(in) :: ps
+    real(WP), dimension(sim_cfg%imino_:,sim_cfg%jmino_:,sim_cfg%kmino_:),     &
+      intent(in), target :: vf, rhof, visc, U, V, W
+    real(WP), dimension(:), allocatable :: planelocs, lptwidths
+    type(filter_info_row) :: f_info_raw
+    integer :: i, j, fh, ierr
+    real(WP) :: fftwidth
+    logical :: use_slice_io
+
+    ! store pointer to simulation config and data
+    this%sim_cfg => sim_cfg; this%ps => ps;
+    this%vf => vf; this%rhof => rhof; this%visc => visc;
+    this%U => U; this%V => V; this%W => W;
+
+    ! set up microscopic statistics
+    call this%mstats%init(sim_cfg%amroot, sim_cfg)
+
+    ! read observation plane info
+    if (sim_cfg%rank .eq. 0) then
+      call param_read('HS obs plane count', this%num_planes)
+      allocate(planelocs(this%num_planes),lptwidths(this%num_planes))
+      call param_read('HS obs plane locations', planelocs)
+      call param_read('HS obs plane lpt widths', lptwidths)
+      call param_read('HS obs plane fft width', fftwidth)
+    end if
 
     ! read filter info (as root)
-    if (sim_pg%rank .eq. 0) then
+    if (sim_cfg%rank .eq. 0) then
       call param_read('HS write slice', use_slice_io)
-      call param_read('HS write slice', use_slice_xz_io)
       open(newunit=fh, file=filterfile, action='READ', access='SEQUENTIAL')
       this%num_filters = 0
       do
@@ -564,365 +751,349 @@ contains
         end select
         this%filters(i)%filtername = f_info_raw%out_fname
         this%filters(i)%params(:) = f_info_raw%params(:)
-        this%filters(i)%use_slice_io = use_slice_io
-        this%filters(i)%use_slice_xz_io = use_slice_xz_io
+        !TODO adapt sliceio to new object layout
+        !this%filters(i)%use_slice_io = use_slice_io
       end do
       close(fh)
     end if
 
-    ! broadcast filter info and setup filters
-    call mpi_bcast(this%num_filters, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
-    if (sim_pg%rank .ne. 0) allocate(this%filters(this%num_filters))
+    ! broadcast filter info
+    call mpi_bcast(this%num_filters, 1, MPI_INTEGER, 0, sim_cfg%comm, ierr)
+    if (sim_cfg%rank .ne. 0) allocate(this%filters(this%num_filters))
     do i = 1, this%num_filters
       call mpi_bcast(this%filters(i)%filtername, str_medium, MPI_CHARACTER, 0,&
-        sim_pg%comm, ierr)
+        sim_cfg%comm, ierr)
       this%filters(i)%filtername = trim(this%filters(i)%filtername)
-      call mpi_bcast(this%filters(i)%type, 1, MPI_INTEGER, 0, sim_pg%comm, ierr)
+      call mpi_bcast(this%filters(i)%type, 1, MPI_INTEGER, 0, sim_cfg%comm,   &
+        ierr)
       call mpi_bcast(this%filters(i)%params, FLT_NUM_PARAMS, MPI_REAL_WP, 0,  &
-        sim_pg%comm, ierr)
-      call mpi_bcast(this%filters(i)%use_slice_io, 1, MPI_LOGICAL, 0,      &
-        sim_pg%comm, ierr)
-      call mpi_bcast(this%filters(i)%use_slice_xz_io, 1, MPI_LOGICAL, 0,      &
-        sim_pg%comm, ierr)
+        sim_cfg%comm, ierr)
+      !call mpi_bcast(this%filters(i)%use_slice_io, 1, MPI_LOGICAL, 0,         &
+      !  sim_cfg%comm, ierr)
+    end do
+
+    ! init observation planes
+    allocate(this%planes(this%num_planes))
+    do i = 1, this%num_planes
+      call this%planes(i)%init(sim_cfg, (/ 1, FFTN(1), FFTN(2) /), ps,        &
+        planelocs(i), fftwidth, lptwidths(i))
+    end do
+
+    ! init filters
+    if (this%num_planes .eq. 0 .and. this%num_filters .gt. 0) call die(       &
+      "Must have at least one observation plane if any filters are used.")
+    do i = 1, this%num_filters
+      call this%filters(i)%init(this%planes(1)%fft)
+    end do
+
+    ! initialize fstats objects
+    allocate(this%fstats(this%num_planes,this%num_filters))
+    do j = 1, this%num_filters
+      do i = 1, this%num_planes
+        !TODO check this is compatible with the root chosen at call / write time
+        call this%fstats(i,j)%init(this%planes(1)%fft%pg%rank .eq. 0)
+      end do
     end do
 
     ! set all processes to not be io processes until it's set up
-    this%in_io_grp = .false.; this%in_io_xz_grp = .false.;
+    !TODO adapt this to new layout
+    !this%in_io_grp = .false.
 
-  end subroutine filterset_init
+    ! cleanup
+    deallocate(planelocs)
 
-  subroutine filterset_init_filters(this)
+  end subroutine xflwstats_init
+
+  !TODO xflwstats_setup_sliceio
+
+  !TODO xflwstats_write_sliceio
+
+  ! computes microscopic statistics along xflow region
+  subroutine xflwstats_xdep_stats(this, step)
+    use mpi_f08, only:   mpi_reduce, MPI_SUM, MPI_INTEGER
+    use parallel, only:  MPI_REAL_WP
     implicit none
-    class(filterset), intent(inout) :: this
-    integer :: i
-
-    do i = 1, this%num_filters
-      call this%filters(i)%init(this%fft)
-    end do
-
-  end subroutine filterset_init_filters
-
-  subroutine filterset_setup_sliceio(this)
-    use mpi_f08    !,  only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR,           &
-      !mpi_allreduce, mpi_bcast
-    use parallel, only: MPI_REAL_WP
-    use param,    only: param_read
-    use messager, only: die
-    use sgrid_class, only: cartesian
-    implicit none
-    class(filterset), intent(inout) :: this
-    type(filter), pointer :: flt
-    integer :: n, li, hi, lj, hj, lk, hk, i, j, ierr
-    real(WP), dimension(:,:,:), pointer :: vx, vy, vz
-    real(WP) :: thickness, height
-    real(WP), dimension(2) :: z
-    integer, dimension(3) :: partition
-    logical, dimension(this%sim_pg%nproc) :: in_group_loc, in_group
-    integer, dimension(3,this%sim_pg%nproc) :: ranges
-    logical :: prev
-
-    ! the the io group we use the parallel decomposition of the first
-    ! two indices used for the simulation and index 1 in the third dimension;
-    ! this means things will run slightly faster if io_idx is in the first
-    ! 1/npz-th of the domain and io_xz_idx in in the first 1/npy-th of the
-    ! domain
-
-    !TODO add option to save slices at lower resolution than the fft grid
-
-    ! xy geometry
-    if (this%sim_pg%amroot)                                                  &
-      call param_read('HS slice thickness proportion', thickness)
-    call mpi_bcast(thickness, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
-    thickness = this%sim_pg%zL * thickness
-    height = 0.5_WP * this%sim_pg%zL / this%sim_pg%npz
-    height = height + this%sim_pg%x(this%sim_pg%imin)
-    z(1) = height; z(2) = height + thickness;
-    this%io_sg = sgrid(coord=cartesian, no=1,                              &
-      x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
-      y=this%fft_pg%y(this%fft_pg%jmin:this%fft_pg%jmax+1),                   &
-      z=z, xper=.true., yper=.true., zper=.false., name='filtslice_xy')
-
-    ! xz geometry
-    if (this%sim_pg%amroot)                                                  &
-      call param_read('HS slice height proportion', height)
-    call mpi_bcast(height, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
-    height = this%sim_pg%yL * height
-    height = height + this%sim_pg%y(this%sim_pg%jmin)
-    z(1) = height; z(2) = height + thickness;
-    this%io_xz_sg = sgrid(coord=cartesian, no=1,                              &
-      x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
-      y=z, z=this%fft_pg%z(this%fft_pg%kmin:this%fft_pg%kmax+1),              &
-      xper=.true., yper=.false., zper=.true., name='filtslice_xz')
-
-    ! xy group
-    in_group_loc(:) = .false.
-    in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%kproc .eq. 1
-    call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,             &
-      MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
-    if (in_group(1)) then; n = 1; else; n = 0; end if;
-    do i = 2, this%sim_pg%nproc
-      if (in_group(i) .and. .not. in_group(i-1)) n = n + 1
-    end do
-    j = 0
-    prev = .false.
-    do i = 1, this%sim_pg%nproc
-      if (in_group(i) .and. .not. prev) then
-        j = j + 1
-        ranges(1,j) = i - 1
-      end if
-      if (.not. in_group(i) .and. prev) then
-        ranges(2,j) = i - 2
-      end if
-      prev = in_group(i)
-    end do
-    if (prev) ranges(2,j) = this%sim_pg%nproc - 1
-    ranges(3,:) = 1
-    if (j .ne. n) call die("[EC] error determining io xy group")
-    call mpi_group_range_incl(this%sim_pg%group, n, ranges(1:3,1:n),          &
-      this%io_grp, ierr)
-    this%in_io_grp = in_group(this%sim_pg%rank+1)
-
-    ! xz group
-    in_group_loc(:) = .false.
-    in_group_loc(this%sim_pg%rank + 1) = this%sim_pg%jproc .eq. 1
-    call mpi_allreduce(in_group_loc, in_group, this%sim_pg%nproc,             &
-      MPI_LOGICAL, MPI_LOR, this%sim_pg%comm, ierr)
-    if (in_group(1)) then; n = 1; else; n = 0; end if;
-    do i = 2, this%sim_pg%nproc
-      if (in_group(i) .and. .not. in_group(i-1)) n = n + 1
-    end do
-    j = 0
-    prev = .false.
-    do i = 1, this%sim_pg%nproc
-      if (in_group(i) .and. .not. prev) then
-        j = j + 1
-        ranges(1,j) = i - 1
-      end if
-      if (.not. in_group(i) .and. prev) then
-        ranges(2,j) = i - 2
-      end if
-      prev = in_group(i)
-    end do
-    if (prev) ranges(2,j) = this%sim_pg%nproc - 1
-    ranges(3,:) = 1
-    if (j .ne. n) call die("[EC] error determining io xz group")
-    call mpi_group_range_incl(this%sim_pg%group, n, ranges(1:3,1:n),          &
-      this%io_xz_grp, ierr)
-    this%in_io_xz_grp = in_group(this%sim_pg%rank+1)
-
-    ! xy partition
-    partition(:) = (/ this%sim_pg%npx, this%sim_pg%npy, 1 /)
-    if (this%in_io_grp) then
-      this%io_cfg = config(grp=this%io_grp, decomp=partition, grid=this%io_sg)
-      this%io_lpt = lpt(cfg=this%io_cfg, name='hitslicexy')
-      this%io_cfg%VF = 1.0_WP
-      this%io_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
-      this%io_pmesh%varname(1) = "id"
-      this%io_pmesh%varname(2) = "dp"
-      this%io_pmesh%vecname(1) = "vel"
-      this%io_pmesh%vecname(2) = "fld"
-    end if
-    allocate(this%io_cpl, source=coupler(src_grp=this%sim_pg%group,           &
-      dst_grp=this%io_grp, name='hitfiltslicexy'))
-    allocate(this%io_lptcpl, source=lptcoupler(src_grp=this%sim_pg%group,     &
-      dst_grp=this%io_grp, name='hitpartslicexy'))
-    call this%io_cpl%set_src(this%fft_pg)
-    call this%io_lptcpl%set_src(this%ps)
-    if (this%in_io_grp) then
-      call this%io_cpl%set_dst(this%io_cfg)
-      call this%io_lptcpl%set_dst(this%io_lpt)
-    end if
-    call this%io_cpl%initialize()
-    call this%io_lptcpl%initialize()
-    if (this%in_io_grp) then
-      this%io_out = npy(pg=this%io_cfg, folder='hitslicexy')
-      call this%io_out%add_particle('partslice', this%io_pmesh)
-    end if
-
-    ! xz partition
-    partition(:) = (/ this%sim_pg%npx, 1, this%sim_pg%npz /)
-    if (this%in_io_xz_grp) then
-      this%io_xz_cfg = config(grp=this%io_xz_grp, decomp=partition, grid=this%io_xz_sg)
-      this%io_xz_lpt = lpt(cfg=this%io_xz_cfg, name='hitslicexz')
-      this%io_xz_cfg%VF = 1.0_WP
-      this%io_xz_pmesh = partmesh(nvar=2, nvec=2, name='lpt')
-      this%io_xz_pmesh%varname(1) = "id"
-      this%io_xz_pmesh%varname(2) = "dp"
-      this%io_xz_pmesh%vecname(1) = "vel"
-      this%io_xz_pmesh%vecname(2) = "fld"
-    end if
-    allocate(this%io_xz_cpl, source=coupler(src_grp=this%sim_pg%group,           &
-      dst_grp=this%io_xz_grp, name='hitfiltslicexz'))
-    allocate(this%io_xz_lptcpl, source=lptcoupler(src_grp=this%sim_pg%group,     &
-      dst_grp=this%io_xz_grp, name='hitpartslicexz'))
-    call this%io_xz_cpl%set_src(this%fft_pg)
-    call this%io_xz_lptcpl%set_src(this%ps)
-    if (this%in_io_xz_grp) then
-      call this%io_xz_cpl%set_dst(this%io_xz_cfg)
-      call this%io_xz_lptcpl%set_dst(this%io_xz_lpt)
-    end if
-    call this%io_xz_cpl%initialize()
-    call this%io_xz_lptcpl%initialize()
-    if (this%in_io_xz_grp) then
-      this%io_xz_out = npy(pg=this%io_xz_cfg, folder='hitslicexz')
-      call this%io_xz_out%add_particle('partslice', this%io_xz_pmesh)
-    end if
-
-    ! xy init filter memory
-    do n = 1, this%num_filters
-      flt => this%filters(n)
-      if (.not. flt%use_slice_io .or. .not. this%in_io_grp) cycle
-      li = this%io_cfg%imino_; hi = this%io_cfg%imaxo_;
-      lj = this%io_cfg%jmino_; hj = this%io_cfg%jmaxo_;
-      lk = this%io_cfg%kmino_; hk = this%io_cfg%kmaxo_;
-      allocate(flt%io_phi(li:hi,lj:hj,lk:hk),                                &
-        flt%io_up(li:hi,lj:hj,lk:hk,3), flt%io_uf(li:hi,lj:hj,lk:hk,3))
-      call this%io_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_phi)
-      vx => flt%io_up(:,:,:,1); vy => flt%io_up(:,:,:,2); vz => flt%io_up(:,:,:,3);
-      call this%io_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
-      vx => flt%io_uf(:,:,:,1); vy => flt%io_uf(:,:,:,2); vz => flt%io_uf(:,:,:,3);
-      call this%io_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
-    end do
-
-    ! xz init filter memory
-    do n = 1, this%num_filters
-      flt => this%filters(n)
-      if (.not. flt%use_slice_xz_io .or. .not. this%in_io_xz_grp) cycle
-      li = this%io_xz_cfg%imino_; hi = this%io_xz_cfg%imaxo_;
-      lj = this%io_xz_cfg%jmino_; hj = this%io_xz_cfg%jmaxo_;
-      lk = this%io_xz_cfg%kmino_; hk = this%io_xz_cfg%kmaxo_;
-      allocate(flt%io_xz_phi(li:hi,lj:hj,lk:hk),                                &
-        flt%io_xz_up(li:hi,lj:hj,lk:hk,3), flt%io_xz_uf(li:hi,lj:hj,lk:hk,3))
-      call this%io_xz_out%add_scalar(trim(flt%filtername) // 'phi', flt%io_xz_phi)
-      vx => flt%io_xz_up(:,:,:,1); vy => flt%io_xz_up(:,:,:,2); vz => flt%io_xz_up(:,:,:,3);
-      call this%io_xz_out%add_vector(trim(flt%filtername) // 'up', vx, vy, vz)
-      vx => flt%io_xz_uf(:,:,:,1); vy => flt%io_xz_uf(:,:,:,2); vz => flt%io_xz_uf(:,:,:,3);
-      call this%io_xz_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
-    end do
-
-  end subroutine filterset_setup_sliceio
-
-  subroutine filterset_write_sliceio(this, t)
-    implicit none
-    class(filterset), intent(inout) :: this
-    real(WP), intent(in) :: t
-
-    if (this%in_io_grp) call this%io_out%write_data(t)
-    if (this%in_io_xz_grp) call this%io_xz_out%write_data(t)
-
-  end subroutine filterset_write_sliceio
-
-  subroutine filterset_compute_stats(this, step)
-    implicit none
-    class(filterset), intent(inout) :: this
+    class(xflwstats), intent(inout) :: this
     integer, intent(in) :: step
-    integer, dimension(3) :: ind
-    integer :: m, n, i
+    integer :: n, i, j, k
+    !real(WP) :: opt_dt TODO add this back in
+    integer, dimension(3) :: indmin, indmax
+    real(WP), dimension(3) :: acc, fvel
+    integer, dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: num
+    real(WP), dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: vf, vfsq
+    real(WP), dimension(3,this%ps%cfg%imin:this%ps%cfg%imax) :: vel, velsq,   &
+      slp, slpsq, drg
 
-    call compute_micro_stats(this%sim_pg, this%fft%pg, this%mstats, this%ps,  &
-      step, this%rhof, this%visc, this%U, this%V, this%W, this%sx, this%sy,   &
-      this%sz, this%phi, this%up, this%uf)
+    ! to be computed:
+    !real(WP) :: rhof, muf, dp, ntot
+    !! these arrays are only imin to imax and don't include overlap
+    !real(WP), dimension(:), allocatable :: num, vf, vfsq
 
-    call filter_ffts_forward(this%fft, this%phi, this%up, this%uf,            &
-      this%phi_in_f, this%up_in_f, this%uf_in_f)
+    indmin(:) = (/ this%ps%cfg%imin, this%ps%cfg%jmin, this%ps%cfg%kmin /)
+    indmax(:) = (/ this%ps%cfg%imax, this%ps%cfg%jmax, this%ps%cfg%kmax /)
 
-    do n = 1, this%num_filters
+    ! zero out arrays
+    num(:) = 0.0_WP; vf(:) = 0.0_WP; vfsq(:) = 0.0_WP;
+    vel(:,:) = 0.0_WP; velsq(:,:) = 0.0_WP;
+    slp(:,:) = 0.0_WP; slpsq(:,:) = 0.0_WP;
+    drg(:,:) = 0.0_WP;
 
-      call compute_filter_stats(this%filters(n)%fstats, this%fft,             &
-        this%filters(n), step, this%phi_in_f, this%up_in_f, this%uf_in_f,     &
-        this%phi, this%phicheck, this%up, this%uf, this%work_r, this%work_c)
+    ! compute microscopic statistics
+    do n = 1, this%ps%np_
+      this%ps%p(n)%ind = this%ps%cfg%get_ijk_global(this%ps%p(n)%pos,         &
+        this%ps%p(n)%ind)
+      i = this%ps%p(n)%ind(1); j = this%ps%p(n)%ind(2); k = this%ps%p(n)%ind(3);
+      if (i .lt. this%ps%cfg%imin_) cycle
+      if (i .gt. this%ps%cfg%imax_) cycle
+      num(i) = num(i) + 1
+      vel(:,i) = vel(:,i) + this%ps%p(n)%vel
+      velsq(:,i) = velsq(:,i) + this%ps%p(n)%vel**2
+      fvel = this%ps%cfg%get_velocity(pos=this%ps%p(n)%pos, i0=i, j0=j, k0=k, &
+        U=this%U, V=this%V, W=this%W)
+      slp(:,i) = slp(:,i) + fvel - this%ps%p(n)%vel
+      slpsq(:,i) = slpsq(:,i) + (fvel - this%ps%p(n)%vel)**2
+      !TODO check this is the right viscosity
+      !call this%ps%get_rhs(U=this%U, V=this%V, W=this%W, rho=this%rhof,       &
+      !  visc=this%visc, p=this%ps%p(n), acc=acc, opt_dt=opt_dt)
+      !TODO repopulate fluid stress back through these routines
+      acc(:) = 0.0_WP
+      drg(:,i) = drg(:,i) + acc
+    end do
 
-      ! xy slice first
-      if (this%filters(n)%use_slice_io) then
-        ! transfer continuum properties
-        call this%io_cpl%push(this%phi)
-        call this%io_cpl%transfer()
-        if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_phi)
-        do m = 1, 3
-          call this%io_cpl%push(this%up(:,:,:,m))
-          call this%io_cpl%transfer()
-          if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_up(:,:,:,m))
-          call this%io_cpl%push(this%uf(:,:,:,m))
-          call this%io_cpl%transfer()
-          if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_uf(:,:,:,m))
+    ! compute coarse statistics across simulation grid
+    do k = this%ps%cfg%kmin_, this%ps%cfg%kmax_
+      do j = this%ps%cfg%jmin_, this%ps%cfg%jmax_
+        do i = this%ps%cfg%imin_, this%ps%cfg%imax_
+          vf(i) = vf(i) + this%vf(i,j,k)
+          vfsq(i) = vfsq(i) + this%vf(i,j,k)**2
         end do
-        ! transfer particle properties to lpt
-        call this%io_lptcpl%push()
-        call this%io_lptcpl%transfer()
-        if (this%in_io_grp) call this%io_lptcpl%pull()
-        ! transfer particles to pmesh
-        if (this%in_io_grp) then
-          call this%io_pmesh%reset()
-          call this%io_pmesh%set_size(this%io_lpt%np_)
-          do i = 1, this%io_lpt%np_
-            this%io_pmesh%pos(:,i) = this%io_lpt%p(i)%pos
-            this%io_pmesh%var(1,i) = this%io_lpt%p(i)%id
-            this%io_pmesh%var(2,i) = this%io_lpt%p(i)%d
-            this%io_pmesh%vec(:,1,i) = this%io_lpt%p(i)%vel
-            ind = this%ps%cfg%get_ijk_global(this%io_lpt%p(i)%pos)
-            this%io_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
-              pos=this%io_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
-              U=this%U, V=this%V, W=this%W)
-          end do
-        end if
-      end if
+      end do
+    end do
 
-      ! xz slice second
-      if (this%filters(n)%use_slice_xz_io) then
-        ! transfer coninuum properties
-        call this%io_xz_cpl%push(this%phi)
-        call this%io_xz_cpl%transfer()
-        if (this%in_io_xz_grp) call this%io_xz_cpl%pull(this%filters(n)%io_xz_phi)
-        do m = 1, 3
-          call this%io_xz_cpl%push(this%up(:,:,:,m))
-          call this%io_xz_cpl%transfer()
-          if (this%in_io_xz_grp) call this%io_xz_cpl%pull(this%filters(n)%io_xz_up(:,:,:,m))
-          call this%io_xz_cpl%push(this%uf(:,:,:,m))
-          call this%io_xz_cpl%transfer()
-          if (this%in_io_xz_grp) call this%io_xz_cpl%pull(this%filters(n)%io_xz_uf(:,:,:,m))
-        end do
-        ! transfer particle properties to lpt
-        call this%io_xz_lptcpl%push()
-        call this%io_xz_lptcpl%transfer()
-        if (this%in_io_xz_grp) call this%io_xz_lptcpl%pull()
-        ! transfer particles to pmesh
-        if (this%in_io_xz_grp) then
-          call this%io_xz_pmesh%reset()
-          call this%io_xz_pmesh%set_size(this%io_xz_lpt%np_)
-          do i = 1, this%io_xz_lpt%np_
-            this%io_xz_pmesh%pos(:,i) = this%io_xz_lpt%p(i)%pos
-            this%io_xz_pmesh%var(1,i) = this%io_xz_lpt%p(i)%id
-            this%io_xz_pmesh%var(2,i) = this%io_xz_lpt%p(i)%d
-            this%io_xz_pmesh%vec(:,1,i) = this%io_xz_lpt%p(i)%vel
-            ind = this%ps%cfg%get_ijk_global(this%io_xz_lpt%p(i)%pos)
-            this%io_xz_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(               &
-              pos=this%io_xz_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),       &
-              U=this%U, V=this%V, W=this%W)
-          end do
-        end if
-      end if
+    ! collect statistics to root
+    call mpi_reduce(this%mstats%num,   num,   this%ps%cfg%nx,   MPI_INTEGER,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(this%mstats%vel,   vel,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(this%mstats%velsq, velsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(this%mstats%slp,   slp,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(this%mstats%slpsq, slpsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(this%mstats%drg,   drg,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+
+    ! sum particles in xflow region
+    if (this%ps%cfg%rank .eq. 0) this%mstats%ntot = sum(this%mstats%num)
+
+    ! note that currently writes are done in a separate method
+
+  end subroutine xflwstats_xdep_stats
+
+  !TODO xflwstats_opln_stats ! observation plane
+  ! will mostly just call single below, but needs to be its own function to iterate through planes and filters, along with calling
+  ! slice io and doing any needed setup work
+  !TODO this has not been edited since being copied from the old version; none of the micro stats/setup stuff is
+  !correct, the iteration through filters has changed, couplers need to be added for particles, etc
+  subroutine xflwstats_opln_stats(this, step, U, V, W, Ux, Vx, Wx)
+    implicit none
+    class(xflwstats), intent(inout) :: this
+    integer, intent(in) :: step
+    real(WP), dimension(this%sim_cfg%imin_:,this%sim_cfg%jmin_:,              &
+      this%sim_cfg%kmin_:), intent(in) :: U, V, W, Ux, Vx, Wx
+    integer :: m, n
+
+    do m = 1, this%num_planes
+
+      ! update obsplane coupler
+      !this%planes(m)%obs_lpt%p(:)%flag = 1   using array mode
+      !call this%planes(m)%obs_lpt%recycle()  using array mode
+      call this%planes(m)%obs_lptcpl%push()
+      call this%planes(m)%obs_lptcpl%transfer()
+      if (this%planes(m)%in_grp) call this%planes(m)%obs_lptcpl%pull()
+
+      do n = 1, this%num_filters
+
+        ! apply filter
+        call this%planes(m)%apply_filter(this%filters(n),                     &
+          this%planes(m)%obs_lptcpl%pulledparticles, U, V, W, Ux, Vx, Wx)
+
+        ! compute relevant stats and write monitor
+        this%fstats(m,n)%step = step
+        call compute_opln_stats_single(this%fstats(m,n),                      &
+          this%planes(m)%fft, this%planes(m)%phimean, this%planes(m)%phi,     &
+          this%planes(m)%phi_x, this%planes(m)%up, this%planes(m)%uf,         &
+          this%planes(m)%work_r, this%planes(m)%work_c)
+        call this%fstats(m,n)%mon%write()
+
+        !TODO update IO (call obsplane routines or move them here, but only
+        ! keep one of the two
+        ! xy slice first
+        !if (this%filters(n)%use_slice_io) then
+        !  ! transfer continuum properties
+        !  call this%io_cpl%push(this%phi)
+        !  call this%io_cpl%transfer()
+        !  if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_phi)
+        !  do m = 1, 3
+        !    call this%io_cpl%push(this%up(:,:,:,m))
+        !    call this%io_cpl%transfer()
+        !    if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_up(:,:,:,m))
+        !    call this%io_cpl%push(this%uf(:,:,:,m))
+        !    call this%io_cpl%transfer()
+        !    if (this%in_io_grp) call this%io_cpl%pull(this%filters(n)%io_uf(:,:,:,m))
+        !  end do
+        !  ! transfer particle properties to lpt
+        !  call this%io_lptcpl%push()
+        !  call this%io_lptcpl%transfer()
+        !  if (this%in_io_grp) call this%io_lptcpl%pull()
+        !  ! transfer particles to pmesh
+        !  if (this%in_io_grp) then
+        !    call this%io_pmesh%reset()
+        !    call this%io_pmesh%set_size(this%io_lpt%np_)
+        !    do i = 1, this%io_lpt%np_
+        !      this%io_pmesh%pos(:,i) = this%io_lpt%p(i)%pos
+        !      this%io_pmesh%var(1,i) = this%io_lpt%p(i)%id
+        !      this%io_pmesh%var(2,i) = this%io_lpt%p(i)%d
+        !      this%io_pmesh%vec(:,1,i) = this%io_lpt%p(i)%vel
+        !      ind = this%ps%cfg%get_ijk_global(this%io_lpt%p(i)%pos)
+        !      this%io_pmesh%vec(:,2,i) = this%ps%cfg%get_velocity(             &
+        !        pos=this%io_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
+        !        U=this%U, V=this%V, W=this%W)
+        !    end do
+        !  end if
+        !end if
+
+      end do
 
     end do
 
-  end subroutine filterset_compute_stats
+  end subroutine xflwstats_opln_stats
 
-  subroutine filterset_destruct(this)
+  ! computes statistics from filtered fields and puts them in the stats object
+  subroutine compute_opln_stats_single(stats, fft, phimean, phi, phi_x,       &
+      up, uf, work_r, work_c)
+    use mpi_f08, only:  mpi_allreduce, MPI_SUM
+    use parallel, only: MPI_REAL_WP
+    implicit none
+    type(xplanestats), intent(inout) :: stats
+    type(cfourier), intent(inout) :: fft
+    real(WP), intent(in) :: phimean
+    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:),           &
+      intent(in) :: phi, phi_x
+    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:),        &
+      intent(in) :: up, uf
+    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:),           &
+      intent(out) ::  work_r
+    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:),        &
+      intent(out) :: work_c
+    real(WP) :: PC2_loc
+    real(WP), dimension(3) :: UB_loc, SB_loc, PCUB_loc, UBPCG_loc
+    real(WP), dimension(3,3) :: UC2_loc
+    integer :: i, j, k, n, m, N2, ierr
+
+    !TODO check fft_pg has no overlap, or fix indices
+
+    N2 = fft%pg%ny * fft%pg%nz
+    i = fft%pg%imin_
+
+    ! store PB
+    stats%PB = phimean
+
+    ! compute UB
+    do n = 1, 3; UB_loc(n) = sum(up(i,:,:,n)); end do
+    call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM,             &
+      fft%pg%comm, ierr)
+    stats%UB = stats%UB / N2
+
+    ! compute Reynolds-stress-type terms
+    !TODO check this has the correct mean
+    UC2_loc(n,m) = 0.0_WP
+    do n = 1, 3
+      do m = n, 3
+        work_r(i,:,:) = up(i,:,:,n) * up(i,:,:,m)
+        UC2_loc(n,m) = sum(work_r(i,:,:))
+      end do
+    end do
+    call mpi_allreduce(UC2_loc, stats%UC2, 9, MPI_REAL_WP, MPI_SUM,           &
+      fft%pg%comm, ierr)
+    stats%UC2 = stats%UC2 / N2
+
+    ! compute SB
+    do n = 1, 3
+      work_r(i,:,:) = uf(i,:,:,n) - up(i,:,:,n)
+      SB_loc(n) = sum(work_r(i,:,:))
+    end do
+    call mpi_allreduce(SB_loc, stats%SB, 3, MPI_REAL_WP, MPI_SUM,             &
+      fft%pg%comm, ierr)
+    stats%SB = stats%SB / N2
+
+    ! compute PC2
+    work_r(i,:,:) = phi(i,:,:)**2
+    PC2_loc = sum(work_r(i,:,:))
+    call mpi_allreduce(PC2_loc, stats%PC2, 1, MPI_REAL_WP, MPI_SUM,           &
+      fft%pg%comm, ierr)
+    stats%PC2 = stats%PC2 / N2
+
+    ! compute UB
+    do n = 1, 3
+      UB_loc(n) = sum(up(i,:,:,n))
+    end do
+    call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM,             &
+      fft%pg%comm, ierr)
+    stats%UB = stats%UB / N2
+
+    ! compute PCUB
+    do n = 1, 3
+      work_r(i,:,:) = phi(i,:,:) * up(i,:,:,n)
+      PCUB_loc(n) = sum(work_r(i,:,:))
+    end do
+    call mpi_allreduce(PCUB_loc, stats%PCUB, 3, MPI_REAL_WP, MPI_SUM,         &
+      fft%pg%comm, ierr)
+    stats%PCUB = stats%PCUB / N2
+
+    ! store/compute products of upbar with gradients of phi check
+    UBPCG_loc(1) = sum(up(i,:,:,1) * phi_x(i,:,:))
+    work_c(:,:,:) = phi(:,:,:)
+    call fft%ytransform_forward(work_c)
+    do k = fft%pg%kmin_, fft%pg%kmax_
+      do i = fft%pg%imin_, fft%pg%imax_
+        work_c(i,:,k) = im * fft%ky(:) * work_c(i,:,k)
+      end do
+    end do
+    call fft%ytransform_backward(work_c)
+    UBPCG_loc(2) = sum(up(i,:,:,2) * realpart(work_c(i,:,:)))
+    work_c(:,:,:) = phi(:,:,:)
+    call fft%ztransform_forward(work_c)
+    do j = fft%pg%jmin_, fft%pg%jmax_
+      do i = fft%pg%imin_, fft%pg%imax_
+        work_c(i,j,:) = im * fft%kz(:) * work_c(i,j,:)
+      end do
+    end do
+    call fft%ztransform_backward(work_c)
+    UBPCG_loc(3) = sum(up(i,:,:,3) * realpart(work_c(i,:,:)))
+    call mpi_allreduce(UBPCG_loc, stats%UBPCG, 3, MPI_REAL_WP, MPI_SUM,     &
+      fft%pg%comm)
+    stats%UBPCG = stats%UBPCG / N2
+
+  end subroutine compute_opln_stats_single
+
+  subroutine xflwstats_destroy(this)
     use messager, only: die
     implicit none
-    type(filterset), intent(inout) :: this
+    class(xflwstats), intent(inout) :: this
     type(filter), pointer :: flt
     integer :: n
 
-    deallocate(this%phi, this%phicheck, this%up, this%uf, this%phi_in_f,       &
-      this%up_in_f, this%uf_in_f, this%work_r, this%work_c)
+    !TODO this
 
     do n = 1, this%num_filters
       flt => this%filters(n)
-      if (flt%use_slice_io) deallocate(flt%io_phi, flt%io_up, flt%io_uf)
-      if (flt%use_slice_xz_io) deallocate(flt%io_xz_phi, flt%io_xz_up, flt%io_xz_uf)
+      !TODO this
     end do
 
-  end subroutine filterset_destruct
+  end subroutine xflwstats_destroy
+
 
 end module xflwstats_class
 

@@ -1,6 +1,6 @@
+!> Statistics for Cube Domain
 !>
-!> Originally written by John P Wakefield in May 2023
-!> Reworked by John P Wakefield in August 2023
+!> John P Wakefield, September 2023
 !>
 module cubestats_class
   use precision,        only: WP
@@ -16,13 +16,14 @@ module cubestats_class
   use coupler_class,    only: coupler
   use lptcoupler_class, only: lptcoupler
   use partmesh_class,   only: partmesh
+  use filterstats
   implicit none
   private
 
   public :: cubestats
 
   !> filtered fluctuation statistics
-  type :: cubestats
+  type :: cubestatblock
     character(len=str_medium) :: out_fname
     type(monitor) :: mon
     integer :: step
@@ -30,14 +31,14 @@ module cubestats_class
     real(WP), dimension(3) :: UB, SB, PCUB, UBPCG   ! x, y, z
     real(WP), dimension(3,3) :: UC2  ! only upper triangle used
   contains
-    procedure :: init => cubestats_cube_init_mon
-    final :: cubestats_cube_destroy_mon
-  end type cubestats
+    procedure :: init => cubestatblock_init_mon
+    final :: cubestatblock_destroy_mon
+  end type cubestatblock
 
   !> filter information
   type :: filter
     character(len=str_medium) :: filtername
-    type(cubestats) :: fstats
+    type(cubestatblock) :: fstats
     integer :: type
     real(WP), dimension(FLT_NUM_PARAMS) :: params
     complex(WP), dimension(:,:,:), allocatable :: flt_f
@@ -50,7 +51,7 @@ module cubestats_class
     final :: filter_destruct
   end type filter
 
-  type :: filterset
+  type :: cubestats
     class(pgrid), pointer :: sim_pg
     real(WP), dimension(:,:,:), pointer :: rhof, visc, U, V, W, sx, sy, sz
     type(lpt), pointer :: ps
@@ -76,13 +77,13 @@ module cubestats_class
     type(lptcoupler), pointer :: io_xy_lptcpl, io_xz_lptcpl
     type(partmesh) :: io_xy_pmesh, io_xz_pmesh
   contains
-    procedure :: init => filterset_init
-    procedure :: init_filters => filterset_init_filters
-    procedure :: setup_sliceio => filterset_setup_sliceio
-    procedure :: write_sliceio => filterset_write_sliceio
-    procedure :: compute_stats => filterset_compute_stats
-    final :: filterset_destruct
-  end type filterset
+    procedure :: init => cubestats_init
+    procedure :: init_filters => cubestats_init_filters
+    procedure :: setup_sliceio => cubestats_setup_sliceio
+    procedure :: write_sliceio => cubestats_write_sliceio
+    procedure :: compute_stats => cubestats_compute_stats
+    final :: cubestats_destruct
+  end type cubestats
 
 
 contains
@@ -223,7 +224,7 @@ contains
         end do
       end block init_gaussian
     case default
-      call die("[filterset] invalid filter type")
+      call die("[cubestats] invalid filter type")
     end select
 
     ! normalize filter
@@ -248,16 +249,22 @@ contains
     implicit none
     type(filter), intent(inout) :: this
 
-    ! nothing to do
+    deallocate(this%flt_f)
+    if (associated(this%io_xy_phi)) deallocate(this%io_xy_phi)
+    if (associated(this%io_xz_phi)) deallocate(this%io_xz_phi)
+    if (associated(this%io_xy_up)) deallocate(this%io_xy_up)
+    if (associated(this%io_xy_uf)) deallocate(this%io_xy_uf)
+    if (associated(this%io_xz_up)) deallocate(this%io_xz_up)
+    if (associated(this%io_xz_uf)) deallocate(this%io_xz_uf)
 
   end subroutine filter_destruct
 
 
   !> macroscopic statistics
 
-  subroutine cubestats_cube_init_mon(this, amroot)
+  subroutine cubestatblock_init_mon(this, amroot)
     implicit none
-    class(cubestats_cube), intent(inout) :: this
+    class(cubestatblock), intent(inout) :: this
     logical, intent(in) :: amroot
 
     this%mon = monitor(amroot, this%out_fname)
@@ -284,15 +291,15 @@ contains
     call this%mon%add_column(this%UC2(2,3), 'UC2yz')
     call this%mon%add_column(this%UC2(3,3), 'UC2zz')
 
-  end subroutine cubestats_cube_init_mon
+  end subroutine cubestatblock_init_mon
 
-  subroutine cubestats_cube_destroy_mon(this)
+  subroutine cubestatblock_destroy_mon(this)
     implicit none
-    type(cubestats_cube), intent(inout) :: this
+    type(cubestatblock), intent(inout) :: this
 
     ! nothing to do
 
-  end subroutine cubestats_cube_destroy_mon
+  end subroutine cubestatblock_destroy_mon
 
   subroutine filter_ffts_forward(fft, phi, up, uf, phi_in_f, up_in_f, uf_in_f)
     implicit none
@@ -338,7 +345,7 @@ contains
     use mpi_f08, only:  mpi_allreduce, MPI_SUM
     use parallel, only: MPI_REAL_WP
     implicit none
-    type(cubestats_cube), intent(inout) :: stats
+    type(cubestatblock), intent(inout) :: stats
     type(cfourier), intent(inout) :: fft
     type(filter), intent(in) :: flt
     integer, intent(in) :: step
@@ -425,35 +432,36 @@ contains
     ! (the gradient of phi and phicheck is the same for HIT, but since we have
     ! phi check we will use it)
     ! x direction
+    work_c(:,:,:) = phicheck(:,:,:)
+    call fft%xtransform_forward(work_c)
     do k = fft%pg%kmin_, fft%pg%kmax_
       do j = fft%pg%jmin_, fft%pg%jmax_
-        work_c(:,j,k) = im * fft%kx(:) * phicheck(:,j,k)
+        work_c(:,j,k) = im * fft%kx(:) * work_c(:,j,k)
       end do
     end do
-    call fft%ztransform_backward(work_c)
-    call fft%ytransform_backward(work_c)
     call fft%xtransform_backward(work_c)
     UBPCG_loc(1) = sum(up(:,:,:,1) * realpart(work_c))
     ! y direction
+    work_c(:,:,:) = phicheck(:,:,:)
+    call fft%ytransform_forward(work_c)
     do k = fft%pg%kmin_, fft%pg%kmax_
       do i = fft%pg%imin_, fft%pg%imax_
-        work_c(i,:,k) = im * fft%ky(:) * phicheck(i,:,k)
+        work_c(i,:,k) = im * fft%ky(:) * work_c(i,:,k)
       end do
     end do
-    call fft%ztransform_backward(work_c)
     call fft%ytransform_backward(work_c)
-    call fft%xtransform_backward(work_c)
     UBPCG_loc(2) = sum(up(:,:,:,2) * realpart(work_c))
     ! z direction
+    work_c(:,:,:) = phicheck(:,:,:)
+    call fft%ztransform_forward(work_c)
     do j = fft%pg%jmin_, fft%pg%jmax_
       do i = fft%pg%imin_, fft%pg%imax_
-        work_c(i,j,:) = im * fft%kz(:) * phicheck(i,j,:)
+        work_c(i,j,:) = im * fft%kz(:) * work_c(i,j,:)
       end do
     end do
     call fft%ztransform_backward(work_c)
-    call fft%ytransform_backward(work_c)
-    call fft%xtransform_backward(work_c)
     UBPCG_loc(3) = sum(up(:,:,:,3) * realpart(work_c))
+    ! collect results
     call mpi_allreduce(UBPCG_loc, stats%UBPCG, 3, MPI_REAL_WP, MPI_SUM,     &
       fft%pg%comm)
     stats%UBPCG = stats%UBPCG / N3
@@ -464,9 +472,9 @@ contains
   end subroutine compute_filter_stats
 
 
-  !> filterset
+  !> cubestats
 
-  subroutine filterset_init(this, sim_pg, filterfile, FFTN, rhof, visc, U, V, W, sx, sy, sz, ps)
+  subroutine cubestats_init(this, sim_pg, filterfile, FFTN, rhof, visc, U, V, W, sx, sy, sz, ps)
     use param,       only: param_read
     use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
       MPI_LOGICAL, MPI_COMM_WORLD
@@ -474,7 +482,7 @@ contains
     use sgrid_class, only: cartesian
     use messager,    only: die
     implicit none
-    class(filterset), intent(inout) :: this
+    class(cubestats), intent(inout) :: this
     class(pgrid), target, intent(in) :: sim_pg
     character(len=str_medium), intent(in) :: filterfile
     integer, dimension(3), intent(in) :: FFTN
@@ -576,20 +584,20 @@ contains
     ! set all processes to not be io processes until it's set up
     this%in_io_xy_grp = .false.; this%in_io_xz_grp = .false.;
 
-  end subroutine filterset_init
+  end subroutine cubestats_init
 
-  subroutine filterset_init_filters(this)
+  subroutine cubestats_init_filters(this)
     implicit none
-    class(filterset), intent(inout) :: this
+    class(cubestats), intent(inout) :: this
     integer :: i
 
     do i = 1, this%num_filters
       call this%filters(i)%init(this%fft)
     end do
 
-  end subroutine filterset_init_filters
+  end subroutine cubestats_init_filters
 
-  subroutine filterset_setup_sliceio(this)
+  subroutine cubestats_setup_sliceio(this)
     use mpi_f08    !,  only: mpi_group_range_incl, MPI_LOGICAL, MPI_LOR,           &
       !mpi_allreduce, mpi_bcast
     use parallel, only: MPI_REAL_WP
@@ -597,7 +605,7 @@ contains
     use messager, only: die
     use sgrid_class, only: cartesian
     implicit none
-    class(filterset), intent(inout) :: this
+    class(cubestats), intent(inout) :: this
     type(filter), pointer :: flt
     integer :: n, li, hi, lj, hj, lk, hk, i, j, ierr
     real(WP), dimension(:,:,:), pointer :: vx, vy, vz
@@ -787,21 +795,21 @@ contains
       call this%io_xz_out%add_vector(trim(flt%filtername) // 'uf', vx, vy, vz)
     end do
 
-  end subroutine filterset_setup_sliceio
+  end subroutine cubestats_setup_sliceio
 
-  subroutine filterset_write_sliceio(this, t)
+  subroutine cubestats_write_sliceio(this, t)
     implicit none
-    class(filterset), intent(inout) :: this
+    class(cubestats), intent(inout) :: this
     real(WP), intent(in) :: t
 
     if (this%in_io_xy_grp) call this%io_xy_out%write_data(t)
     if (this%in_io_xz_grp) call this%io_xz_out%write_data(t)
 
-  end subroutine filterset_write_sliceio
+  end subroutine cubestats_write_sliceio
 
-  subroutine filterset_compute_stats(this, step)
+  subroutine cubestats_compute_stats(this, step)
     implicit none
-    class(filterset), intent(inout) :: this
+    class(cubestats), intent(inout) :: this
     integer, intent(in) :: step
     integer, dimension(3) :: ind
     integer :: m, n, i
@@ -891,12 +899,12 @@ contains
 
     end do
 
-  end subroutine filterset_compute_stats
+  end subroutine cubestats_compute_stats
 
-  subroutine filterset_destruct(this)
+  subroutine cubestats_destruct(this)
     use messager, only: die
     implicit none
-    type(filterset), intent(inout) :: this
+    type(cubestats), intent(inout) :: this
     type(filter), pointer :: flt
     integer :: n
 
@@ -909,7 +917,7 @@ contains
       if (flt%use_slice_xz_io) deallocate(flt%io_xz_phi, flt%io_xz_up, flt%io_xz_uf)
     end do
 
-  end subroutine filterset_destruct
+  end subroutine cubestats_destruct
 
-end module cubestats_cube_class
+end module cubestats_class
 

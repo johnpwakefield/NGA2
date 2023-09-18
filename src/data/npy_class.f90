@@ -12,10 +12,9 @@ module npy_class
   !  -  this is *not* a performant way to write large amounts of data; it is
   !     an easy way to do analysis on small amounts of data through python
   !     without all the trouble of using an ensight reader
-  !  -  an ideal future direction would be to implement an HDF5 based output;
-  !     support across languages is very good for HDF5
+  !  -  an ideal future direction would be to implement an HDF5 based output
 
-  public :: npy
+  public :: npy, npysimple_write2d, npysimple_write3d
 
   ! file related constants
   character(len=*), parameter :: SLASH = "/"
@@ -443,6 +442,38 @@ contains
     write(fn, '(a,a,a,a,i0.8,a)') trim(this%dir), SLASH, trim(field), "_", n, ".npy"
 
   end subroutine get_filename
+
+  subroutine npysimple_write2d(fn, a, unit)
+    implicit none
+    character(len=*), intent(in) :: fn
+    real(WP), dimension(:,:), intent(in) :: a
+    integer, intent(in) :: unit
+    integer :: headsize
+
+    call write_array_header(fn, shape(a), headsize)
+
+    open(unit=unit, file=fn, access='stream', form='unformatted',             &
+      action='write', status='replace', position='append')
+    write(unit) a
+    close(unit)
+
+  end subroutine npysimple_write2d
+
+  subroutine npysimple_write3d(fn, a, unit)
+    implicit none
+    character(len=*), intent(in) :: fn
+    real(WP), dimension(:,:,:), intent(in) :: a
+    integer, intent(in) :: unit
+    integer :: headsize
+
+    call write_array_header(fn, shape(a), headsize)
+
+    open(unit=unit, file=fn, access='stream', form='unformatted',             &
+      action='write', status='replace', position='append')
+    write(unit) a
+    close(unit)
+
+  end subroutine npysimple_write3d
 
   !TODO combine this with write_meta; there's not a good reason to split this
   subroutine write_meta_sub(fn, name, fieldscalars, fieldvectors,             &

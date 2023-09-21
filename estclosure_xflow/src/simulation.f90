@@ -30,8 +30,8 @@ module simulation
   use event_class,          only: periodic_event, threshold_event
   use monitor_class,        only: monitor
   use datafile_class,       only: datafile
-  !use cubestats_class,      only: cubestats
-  !use xflwstats_class,      only: xflwstats
+  use cubestats_class,      only: cubestats
+  use xflwstats_class,      only: xflwstats
   use eccontroller_class,   only: eccontroller_mesh
   use lpt_class,            only: lpt
   use string,               only: str_medium
@@ -81,28 +81,17 @@ module simulation
     real(WP) :: urms, TKE, EPS, eta, Re_lambda,                               &
       EPS_ratio, TKE_ratio, ell_ratio, dx_eta, forcingtimescale, Stk, phiinf, &
       Wovk, EPSp
-    !TODO re-enable
-    !type(cubestats) :: stats
+    type(cubestats) :: stats
     type(monitor) :: hitfile
   end type cubedomain
 
   type, extends(gendomain) :: xflowdomain
     type(fft2d) :: ps
-    !TODO re-enable
-    !type(xflwstats) :: stats
+    type(xflwstats) :: stats
   end type xflowdomain
-
-  !TODO move this to xflowstats
-  !type :: xflowslice
-  !  type(config)   :: cfg
-  !  type(partmesh) :: pmesh
-  !  type(npy)      :: npy_out
-  !end type xflowslice
 
   type(cubedomain)  :: cube
   type(xflowdomain) :: xflw
-  !TODO move this to xflowstats
-  !type(xflowslice)  :: xflwslice
 
 
   !> Time-related
@@ -488,10 +477,6 @@ contains
 
     call param_read('Particle reset boundaries', part_reset_bdrys)
     part_reset_bdrys(:) = part_reset_bdrys(:) + cube%cfg%x(cube%cfg%imin)
-    if (amroot) then
-      write(*,*) "DEBUG Cube boundaries: ", cube%cfg%x(cube%cfg%imin), ", ", cube%cfg%x(cube%cfg%imax+1)
-      write(*,*) "DEBUG Reset threshholds: ", part_reset_bdrys
-    end if
 
   end subroutine geometry_cube_init
 
@@ -542,39 +527,6 @@ contains
     flag = i .eq. pg%imax_+1
 
   end function xflow_outflow_locator
-
-  !TODO move this to xflowstats
-  !subroutine geometry_xflowslice_init()
-  !  use parallel, only: group
-  !  implicit none
-  !  type(sgrid) :: grid
-  !  integer :: i, Nx, Ny
-  !  integer, dimension(3) :: partition
-  !  real(WP) :: obs_start, obs_end
-  !  real(WP), dimension(:), allocatable :: x, y, z
-
-  !  call param_read('Obs start', obs_start)
-  !  call param_read('Obs end',   obs_end  )
-  !  call param_read('Obs Nl', Nx)
-  !  call param_read('Obs Nw', Ny)
-  !  allocate(x(Nx+1), y(Ny+1), z(Ny+1))
-  !  x(:) = (/ (real(i, WP) / Nx, i = 0, Nx) /)
-  !  x(:) = x(:) * (obs_end - obs_start) + obs_start
-  !  y(:) = (/ (real(i, WP) / Ny, i = 0, Ny) /)
-  !  z(:) = (/ (real(i, WP) / Ny, i = 0, Ny) /)
-  !  y(:) = y(:) * (xflw%cfg%y(xflw%cfg%jmax+1) - xflw%cfg%y(xflw%cfg%jmin))   &
-  !    + xflw%cfg%y(xflw%cfg%jmin)
-  !  z(:) = z(:) * (xflw%cfg%z(xflw%cfg%kmax+1) - xflw%cfg%z(xflw%cfg%kmin))   &
-  !    + xflw%cfg%z(xflw%cfg%kmin)
-  !  grid = sgrid(coord=cartesian, no=1, x=x, y=y, z=z, xper=.false.,          &
-  !    yper=.true., zper=.true., name='HIT')
-  !  deallocate(x,y,z)
-
-  !  call param_read('Partition', partition)
-  !  xflwslice%cfg = config(grp=group, decomp=partition, grid=grid)
-  !  xflwslice%cfg%VF = 1.0_WP
-
-  !end subroutine geometry_xflowslice_init
 
   subroutine gendomain_allocate(d)
     implicit none
@@ -681,7 +633,8 @@ contains
       use incomp_class,    only: dirichlet, clipped_neumann
 
       ! Cube
-      cube%fs = incomp(cfg=cube%cfg,name='NS solver')
+      !TODO PROVIDE DDADI IMPLICIT VEL SOLVEER
+      cube%fs = incomp(cfg=cube%cfg, name='NS solver')
       cube%fs%visc(:,:,:) = ec_params(1) * ec_params(5)
       cube%ps = fft3d(cfg=cube%cfg, name='Pressure', nst=7)
       call cube%fs%setup(pressure_solver=cube%ps)
@@ -689,6 +642,7 @@ contains
       cube%rho(:,:,:) = ec_params(1)
 
       ! XFlow
+      !TODO PROVIDE DDADI IMPLICIT VEL SOLVEER
       xflw%fs = incomp(cfg=xflw%cfg, name='NS solver')
       xflw%fs%visc(:,:,:) = ec_params(1) * ec_params(5)
       xflw%fs%rho = ec_params(1)
@@ -751,8 +705,6 @@ contains
           cube%lp%p(i)%vel(:) = cube%cfg%get_velocity(pos=cube%lp%p(i)%pos,   &
             i0=idx(1), j0=idx(2), k0=idx(3), U=cube%fs%U, V=cube%fs%V,        &
             W=cube%fs%W)
-          ! Give zero velocity
-          !cube%lp%p(i)%vel(:) = 0.0_WP
           ! Activate the particle
           cube%lp%p(i)%flag = 0
         end do
@@ -803,23 +755,23 @@ contains
     if (amroot) call log("Initialized xflow LPT.")
 
     ! Set up cubestats and xflwstats
-    !TODO re-enable
-    !initialize_statsobjs: block
-    !  character(len=str_medium) :: filterfile
-    !  integer, dimension(3) :: hitFFTN, xflowFFTN
-    !  call param_read('Filter list', filterfile)
-    !  call param_read('Cube FFT mesh', hitFFTN)
-    !  call param_read('XFlow FFT mesh', xflowFFTN)
-    !  call cube%stats%init(cube%cfg, filterfile, FFTN, cube%rho,              &
-    !    cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W, cube%ps)
-    !  call xflow%stats%init(cube%cfg, filterfile, FFTN, cube%rho,             &
-    !    cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W, cube%ps)
-    !  call cube%stats%init_filters()
-    !  call xflow%stats%init_filters()
-    !  call cube%stats%setup_sliceio()
-    !  call xflow%stats%setup_sliceio()
-    !end block initialize_statsobjs
-    if (amroot) call log("Initialized statistics.")
+    initialize_statsobjs: block
+      character(len=str_medium) :: filterfile
+      integer, dimension(3) :: hitFFTN
+      integer, dimension(2) :: xflowFFTN
+      call param_read('Filter list', filterfile)
+      call param_read('Cube FFT mesh', hitFFTN)
+      call param_read('XFlow FFT mesh', xflowFFTN)
+      call cube%stats%init(cube%cfg, filterfile, hitFFTN, cube%rho,           &
+        cube%fs%visc, cube%fs%U, cube%fs%V, cube%fs%W, cube%lp)
+      call cube%stats%init_filters()
+      call cube%stats%setup_sliceio()
+      if (amroot) call log("Initialized cube statistics object.")
+      call xflw%stats%init(xflw%cfg, filterfile, xflowFFTN, xflw%cfg%VF,      &
+        xflw%rho, xflw%fs%visc, xflw%fs%U, xflw%fs%V, xflw%fs%W, xflw%lp)
+      call xflw%stats%sliceio_init()
+      if (amroot) call log("Initialized xflow statistics object.")
+    end block initialize_statsobjs
 
     ! Initialize forcing
     initialize_forcing: block
@@ -845,7 +797,7 @@ contains
     call dom_lptcpl%initialize()
     if (amroot) call log("Initialized domain couplers.")
 
-    ! Prepare initial velocity fields
+    ! prepare initial velocity fields
     call init_vel(cube%fs, ec_params(3), cube%resU, cube%resV, cube%resW)
     !call init_vel(xflw%fs, ec_params(3), xflw%resU, xflw%resV, xflw%resW,     &
     !  mask=dom_cpl%overlap)
@@ -854,8 +806,11 @@ contains
     xflw%fs%W(:,:,:) = 0.0_WP
     if (amroot) call log("Initial velocity fields prepared.")
 
-    ! Calculate divergence
+    ! calculate divergence
     call cube%fs%get_div()
+
+    ! calculate stress
+
 
     ! update parameters to print logging information
     call update_parameters()
@@ -933,9 +888,6 @@ contains
 
     end block create_monitor
     if (amroot) call log("Primary monitor files created.")
-
-    ! allocate filter memory
-    !TODO
 
     ! write zero time statistics
     !TODO
@@ -1047,7 +999,7 @@ contains
           wt_cube_pres%time_in = parallel_time()
           call cube%fs%correct_mfr()
           call cube%fs%get_div()
-          cube%fs%psolv%rhs = -cube%fs%cfg%vol*cube%fs%div*cube%fs%rho/time%dt
+          cube%fs%psolv%rhs = -cube%fs%cfg%vol * cube%fs%div * cube%fs%rho / time%dt
           call cube%fs%psolv%solve()
           call cube%fs%shift_p(cube%fs%psolv%sol)
           call cube%fs%get_pgrad(cube%fs%psolv%sol, cube%resU, cube%resV, cube%resW)
@@ -1156,6 +1108,9 @@ contains
         call write_gendom_monitors(xflw)
         wt_stat%time = wt_stat%time + parallel_time() - wt_stat%time_in
 
+        ! x dependent statistics
+
+
         ! Monitor timing
         wt_total%time = parallel_time() - wt_total%time_in
         wt_rest%time = wt_total%time - wt_cube_vel%time - wt_cube_pres%time &
@@ -1190,13 +1145,12 @@ contains
       ec_next: block
         real(WP) :: interval
 
-        !TODO re-enable
-        !call cube%stats%compute_stats(time%n)
-        !call xflow%stats%compute_stats(time%n)
+        ! collect statistics for this target value
+        call cube%stats%compute_stats(time%n)
+        call xflw%stats%compute_stats(time%n, time%t)  ! also writes slices
         call ec%update_write(cube%Re_lambda, cube%Stk, cube%phiinf,           &
           cube%Wovk, cube%urms, cube%eta, time%t, time%n)
-        !call cube%stats%write_sliceio(time%t)
-        !call xflow%stats%write_sliceio(time%t)
+        call cube%stats%write_sliceio(time%t)
 
         if (ens_at_ints) then
           call write_ens(cube)

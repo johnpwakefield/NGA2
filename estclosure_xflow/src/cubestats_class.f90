@@ -53,7 +53,7 @@ module cubestats_class
 
   type :: cubestats
     class(pgrid), pointer :: sim_pg
-    real(WP), dimension(:,:,:), pointer :: rhof, visc, U, V, W, sx, sy, sz
+    real(WP), dimension(:,:,:), pointer :: rhof, visc, U, V, W, zeros
     type(lpt), pointer :: ps
     type(sgrid) :: fft_sg
     type(pgrid) :: fft_pg
@@ -93,7 +93,7 @@ contains
   ! this method subtly depends on the fft pgrid and the sim_pgrid sharing the same
   ! parallel decomposition so that particles end up on the same processors
   subroutine compute_micro_stats(sim_pg, fft_pg, stats, ps, step, rhof, visc,  &
-    U, V, W, sx, sy, sz, indfield, pvelfield, fvelfield)
+    U, V, W, zeros, indfield, pvelfield, fvelfield)
     use mpi_f08, only:   mpi_allreduce, mpi_reduce, MPI_SUM, MPI_INTEGER
     use parallel, only:  MPI_REAL_WP
     use mathtools, only: pi
@@ -102,7 +102,7 @@ contains
     type(microstats), intent(inout) :: stats
     type(lpt), intent(inout) :: ps
     integer, intent(in) :: step
-    real(WP), dimension(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:), intent(in) :: rhof, visc, U, V, W, sx, sy, sz
+    real(WP), dimension(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:), intent(in) :: rhof, visc, U, V, W, zeros
     real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:), optional, intent(out) :: indfield
     real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:,1:), optional, intent(out) :: pvelfield, fvelfield
     real(WP) :: dp_loc, VF_loc, taup_loc, pvol, cellvoli
@@ -145,8 +145,8 @@ contains
         j0=ps%p(n)%ind(2), k0=ps%p(n)%ind(3), U=U, V=V, W=W)
       slp = fvel - ps%p(n)%vel
       slp_loc = slp_loc + slp
-      call ps%get_rhs(U=U, V=V, W=W, rho=rhof, visc=visc, stress_x=sx,        &
-        stress_y=sy, stress_z=sz, p=ps%p(n), acc=drg,                         &
+      call ps%get_rhs(U=U, V=V, W=W, rho=rhof, visc=visc, stress_x=zeros,     &
+        stress_y=zeros, stress_z=zeros, p=ps%p(n), acc=drg,                   &
         opt_dt=junk(4))
       drg_loc = drg_loc + drg
       taup_loc = taup_loc + sum(slp * drg) / sum(drg**2)
@@ -474,7 +474,7 @@ contains
 
   !> cubestats
 
-  subroutine cubestats_init(this, sim_pg, filterfile, FFTN, rhof, visc, U, V, W, sx, sy, sz, ps)
+  subroutine cubestats_init(this, sim_pg, filterfile, FFTN, rhof, visc, U, V, W, ps)
     use param,       only: param_read
     use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
       MPI_LOGICAL, MPI_COMM_WORLD
@@ -492,10 +492,7 @@ contains
       visc(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                     &
       U(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
       V(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
-      W(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                        &
-      sx(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                       &
-      sy(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:),                       &
-      sz(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:)
+      W(sim_pg%imino_:,sim_pg%jmino_:,sim_pg%kmino_:)
     real(WP), dimension(3) :: dx
     real(WP), dimension(:), allocatable :: fftxs, fftys, fftzs
     type(filter_info_row) :: f_info_raw
@@ -506,7 +503,11 @@ contains
     this%sim_pg => sim_pg; this%ps => ps;
     this%rhof => rhof; this%visc => visc;
     this%U => U; this%V => V; this%W => W;
-    this%sx => sx; this%sy => sy; this%sz => sz;
+
+    ! allocate array of zeros
+    allocate(this%zeros(sim_pg%imino_:sim_pg%imaxo_,                          &
+      sim_pg%jmino_:sim_pg%jmaxo_,sim_pg%kmino_:sim_pg%kmaxo_))
+    this%zeros(:,:,:) = 0.0_WP
 
     ! set up microscopic statistics
     this%mstats%out_fname = 'microstats'
@@ -518,6 +519,9 @@ contains
     do i = 1, FFTN(1) + 1; fftxs(i) = real(i-1,WP) * dx(1); end do;
     do i = 1, FFTN(2) + 1; fftys(i) = real(i-1,WP) * dx(2); end do;
     do i = 1, FFTN(3) + 1; fftzs(i) = real(i-1,WP) * dx(3); end do;
+    fftxs(:) = fftxs(:) + sim_pg%x(sim_pg%imin)
+    fftys(:) = fftys(:) + sim_pg%y(sim_pg%jmin)
+    fftzs(:) = fftzs(:) + sim_pg%z(sim_pg%kmin)
     this%fft_sg = sgrid(coord=cartesian, no=0, x=fftxs, y=fftys, z=fftzs,     &
       xper=.true., yper=.true., zper=.true., name='EC_FFT_G')
     this%fft_pg = pgrid(this%fft_sg, GROUP, (/ sim_pg%npx, sim_pg%npy,        &
@@ -624,26 +628,24 @@ contains
 
     !TODO add option to save slices at lower resolution than the fft grid
 
-    ! xy geometry
+    ! read thickness
     if (this%sim_pg%amroot)                                                  &
       call param_read('HS slice thickness proportion', thickness)
     call mpi_bcast(thickness, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
-    thickness = this%sim_pg%zL * thickness
+
+    ! xy geometry
     height = 0.5_WP * this%sim_pg%zL / this%sim_pg%npz
-    height = height + this%sim_pg%x(this%sim_pg%imin)
-    z(1) = height; z(2) = height + thickness;
+    height = height + this%sim_pg%z(this%sim_pg%kmin)
+    z(1) = height; z(2) = height + this%sim_pg%zL * thickness;
     this%io_xy_sg = sgrid(coord=cartesian, no=1,                              &
       x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
       y=this%fft_pg%y(this%fft_pg%jmin:this%fft_pg%jmax+1),                   &
       z=z, xper=.true., yper=.true., zper=.false., name='filtslice_xy')
 
     ! xz geometry
-    if (this%sim_pg%amroot)                                                  &
-      call param_read('HS slice height proportion', height)
-    call mpi_bcast(height, 1, MPI_REAL_WP, 0, this%sim_pg%comm, ierr)
-    height = this%sim_pg%yL * height
+    height = 0.5_WP * this%sim_pg%yL / this%sim_pg%npy
     height = height + this%sim_pg%y(this%sim_pg%jmin)
-    z(1) = height; z(2) = height + thickness;
+    z(1) = height; z(2) = height + this%sim_pg%yL * thickness;
     this%io_xz_sg = sgrid(coord=cartesian, no=1,                              &
       x=this%fft_pg%x(this%fft_pg%imin:this%fft_pg%imax+1),                   &
       y=z, z=this%fft_pg%z(this%fft_pg%kmin:this%fft_pg%kmax+1),              &
@@ -815,8 +817,8 @@ contains
     integer :: m, n, i
 
     call compute_micro_stats(this%sim_pg, this%fft%pg, this%mstats, this%ps,  &
-      step, this%rhof, this%visc, this%U, this%V, this%W, this%sx, this%sy,   &
-      this%sz, this%phi, this%up, this%uf)
+      step, this%rhof, this%visc, this%U, this%V, this%W, this%zeros,         &
+      this%phi, this%up, this%uf)
 
     call filter_ffts_forward(this%fft, this%phi, this%up, this%uf,            &
       this%phi_in_f, this%up_in_f, this%uf_in_f)
@@ -909,7 +911,7 @@ contains
     integer :: n
 
     deallocate(this%phi, this%phicheck, this%up, this%uf, this%phi_in_f,       &
-      this%up_in_f, this%uf_in_f, this%work_r, this%work_c)
+      this%up_in_f, this%uf_in_f, this%work_r, this%work_c, this%zeros)
 
     do n = 1, this%num_filters
       flt => this%filters(n)

@@ -1,12 +1,12 @@
 # Parallelization
-Partition :	4 8 1
+Partition :	7 4 1
 
 # Mesh definition
 Cube Lx   : 1.0
-Cube Nx   : 144
-Xflow Ll  : 4.0
+Cube Nx   : 72
+Xflow Ll  : 5.1
 Xflow Nl  : 400
-Xflow Nw  : 144
+Xflow Nw  : 72
 Overlap   : 0.04
 
 # Particle Parameters
@@ -24,15 +24,15 @@ Particle reset boundaries : 0.2 0.24
 
 # Parameter sweep
 EC min Relambda : 35.0
-EC max Relambda : 55.0
-EC num Relambda : 3
+EC max Relambda : 35.0
+EC num Relambda : 1
 EC log Relambda : false
 EC min Stk      : 0.5
-EC max Stk      : 4.0
-EC num Stk      : 8
+EC max Stk      : 2.0
+EC num Stk      : 4
 EC log Stk      : false
 EC min Wovk     : 0.0
-EC max Wovk     : 3.0
+EC max Wovk     : 2.0
 EC num Wovk     : 3
 EC log Wovk     : false
 EC min vf       : 1e-6
@@ -45,17 +45,20 @@ EC data per statpoint : 40
 
 # data collection parameters
 EC integral timescales :    1.0
-EC new sim multiplier :     80.0
+EC new sim multiplier :     8.0
 EC new params multiplier :  2.0
 
 # EC Parameters
-EC FFT mesh       : 256 256 256
-EC filter list    : filterlist.txt
+Cube FFT mesh   : 256 256 256
+XFlow FFT mesh  : 256 256
+Filter list     : filterlist.txt
 
 # HS Parameters
 HS write slice                : true
-HS slice thickness proportion : 0.2
-HS slice height proportion    : 0.2
+HS slice thickness proportion : 0.1
+HS obs plane count            : 3
+HS obs plane locations        : 2.5 3.0 3.5
+HS obs plane lpt widths       : 1.5 1.5 1.5
 
 # Time integration
 Max timestep size : 4e-2

@@ -202,7 +202,7 @@ contains
     type(MPI_STATUS) :: sstat, rstat, wstat
     type(MPI_FILE) :: fh
     integer(MPI_OFFSET_KIND) :: offset
-    character(len=str_medium) :: fn
+    character(len=str_long) :: fn
     type(llitem), pointer :: item
     type(pmitem), pointer :: pitem
     integer :: i, li, hi, lj, hj, ntot, bufsize, headsize, ierr
@@ -437,7 +437,7 @@ contains
     class(npy), intent(in) :: this
     character(len=*), intent(in) :: field
     integer, intent(in) :: n
-    character(len=str_medium), intent(out) :: fn
+    character(len=str_long), intent(out) :: fn
 
     write(fn, '(a,a,a,a,i0.8,a)') trim(this%dir), SLASH, trim(field), "_", n, ".npy"
 

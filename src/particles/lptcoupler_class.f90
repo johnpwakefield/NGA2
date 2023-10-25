@@ -228,12 +228,15 @@ contains
     real(WP), dimension(3) :: bcorner, tcorner
     integer :: i, j, k, ierr
 
-    if (this%srank .ne. MPI_UNDEFINED .and. .not. this%have_src) call die('[lptcoupler] source grid has not been set')
-    if (this%drank .ne. MPI_UNDEFINED .and. .not. this%have_dst) call die('[lptcoupler] destination grid has not been set')
+    if (this%srank .ne. MPI_UNDEFINED .and. .not. this%have_src)              &
+      call die('[lptcoupler] source grid has not been set')
+    if (this%drank .ne. MPI_UNDEFINED .and. .not. this%have_dst)              &
+      call die('[lptcoupler] destination grid has not been set')
 
     if (this%initialized) then
       call warn('[lptcoupler] already initialized')
-      deallocate(this%sendcounts, this%sendbuf, this%recvbuf)
+      deallocate(this%sendcounts, this%sendbuf, this%recvbuf, this%urankmap,  &
+        this%drankmap)
     end if
 
     ! find overlap
@@ -320,7 +323,7 @@ contains
     ! allocate memory
     allocate(this%sendcounts(this%unp), this%recvcounts(this%unp))
     call this%push(only_count=.true.)
-    this%sendbufsize = ceiling(MEM_ADJ_UP * maxval(this%sendcounts))
+    this%sendbufsize = max(ceiling(MEM_ADJ_UP * maxval(this%sendcounts)), 1)
     allocate(this%sendbuf(this%sendbufsize*this%dnp))
     this%recvbufsize = 0; allocate(this%recvbuf(this%recvbufsize));
 
@@ -367,7 +370,6 @@ contains
 
     do i = 1, this%src%np_
       if (.not. this%in_overlap(this%src%p(i)%pos)) cycle
-      !TODO this chunk is new
       if (allocated(this%pushflagfilter)) then
         if (any(this%src%p(i)%flag .eq. this%pushflagfilter)) cycle
       end if
@@ -440,7 +442,7 @@ contains
     use lpt_class, only: MPI_PART
     implicit none
     class(lptcoupler), intent(inout) :: this
-    integer, dimension(this%unp) :: senddisps, recvdisps, uranks, dranks
+    integer, dimension(1:this%unp) :: senddisps, recvdisps, uranks, dranks
     integer :: i, ierr
 
     ! send sizes
@@ -471,6 +473,14 @@ contains
     ! compute recieve displacements
     recvdisps(:) = (/ (sum(this%recvcounts(1:i)), i = 0, this%unp - 1) /)
 
+    !TODO DEBUG
+    !write(*,"(I3,A,I8,A,I8,A,I8)") this%urank, " - ranks - ", this%srank, ", ", this%drank, ", ", MPI_UNDEFINED
+    !write(*,"(I3,A,I8,A,I8)") this%urank, " - bufsizes - ", this%sendbufsize, ", ", this%recvbufsize
+    !write(*,"(I3,A,*(I8))") this%urank, " - sendcounts - ", this%sendcounts
+    !write(*,"(I3,A,*(I8))") this%urank, " - senddisps - ",       senddisps
+    !write(*,"(I3,A,*(I8))") this%urank, " - recvcounts - ", this%recvcounts
+    !write(*,"(I3,A,*(I8))") this%urank, " - recvdisps - ",       recvdisps
+
     ! send particles
     call mpi_alltoallv(this%sendbuf, this%sendcounts, senddisps, MPI_PART,    &
                        this%recvbuf, this%recvcounts, recvdisps, MPI_PART,    &
@@ -479,3 +489,4 @@ contains
   end subroutine transfer
 
 end module lptcoupler_class
+

@@ -39,15 +39,15 @@ module xflwstats_class
 
 
   !> microscopic statistics along domain (saved as monitor files)
+  ! data only allocated / updated on root
   type :: xdepstats
-    type(monitor) :: globalmon
     integer :: step
-    integer, dimension(18) :: units
-    ! data only allocated / updated on root
-    real(WP) :: rhof, muf, dp, ntot
+    integer, dimension(22) :: units
     ! these arrays are only imin to imax and don't include overlap
-    real(WP), dimension(:), allocatable :: num, vf, vfsq
-    real(WP), dimension(:,:), allocatable :: vel, velsq, slp, slpsq, drg   ! 3 by nx
+    integer, dimension(:), allocatable :: num
+    real(WP), dimension(:), allocatable :: nden, ndensq, p
+    real(WP), dimension(:,:), allocatable :: vel, velsq, slp, slpsq, drg, fvel  ! 3 by nx
+    integer, dimension(:,:,:), allocatable :: tmpmesh
   contains
     procedure :: init => xdepstats_init
     procedure :: write => xdepstats_write
@@ -127,7 +127,7 @@ module xflwstats_class
 
     class(config), pointer :: sim_cfg
 
-    real(WP), dimension(:,:,:), pointer :: vf, rhof, visc, U, V, W, zeros
+    real(WP), dimension(:,:,:), pointer :: vf, rhof, p, visc, U, V, W, zeros
     type(lpt), pointer :: ps
 
     integer :: num_filters, num_planes
@@ -154,24 +154,20 @@ contains
 
   !> xdepstats (simple stats across xflow)
 
-  subroutine xdepstats_init(this, mkdir, g)
+  subroutine xdepstats_init(this, g, mkdir)
     implicit none
     class(xdepstats), intent(inout) :: this
+    class(pgrid), target, intent(in) :: g
     logical, intent(in) :: mkdir
-    class(pgrid), intent(in) :: g
     integer :: i
 
-    allocate(this%num(g%imin:g%imax), this%vf(g%imin:g%imax),                 &
-      this%vfsq(g%imin:g%imax), this%vel(3,g%imin:g%imax),                    &
-      this%velsq(3,g%imin:g%imax), this%slp(3,g%imin:g%imax),                 &
-      this%slpsq(3,g%imin:g%imax), this%drg(3,g%imin:g%imax))
-
-    this%globalmon = monitor(g%rank .eq. 0, 'xflw_stat_global')
-    call this%globalmon%add_column(this%step, 'step')
-    call this%globalmon%add_column(this%rhof, 'rhof')
-    call this%globalmon%add_column(this%muf,  'muf')
-    call this%globalmon%add_column(this%dp,   'dp')
-    call this%globalmon%add_column(this%ntot, 'ntot')
+    allocate(this%num(g%imin:g%imax),                                         &
+      this%nden(g%imin:g%imax), this%ndensq(g%imin:g%imax),                   &
+      this%vel(3,g%imin:g%imax), this%velsq(3,g%imin:g%imax),                 &
+      this%slp(3,g%imin:g%imax), this%slpsq(3,g%imin:g%imax),                 &
+      this%drg(3,g%imin:g%imax), this%p(g%imin:g%imax),                       &
+      this%fvel(3,g%imin:g%imax))
+    allocate(this%tmpmesh(g%imin:g%imax,g%jmin:g%jmax,g%kmin:g%kmax))
 
     ! just use raw files for all the x dependent statistics
     if (g%rank .eq. 0) then
@@ -179,9 +175,9 @@ contains
       open(newunit=this%units( 1), action='WRITE', form='FORMATTED',          &
         file='xflw_stat/num')
       open(newunit=this%units( 2), action='WRITE', form='FORMATTED',          &
-        file='xflw_stat/vf')
+        file='xflw_stat/nden')
       open(newunit=this%units( 3), action='WRITE', form='FORMATTED',          &
-        file='xflw_stat/vfsq')
+        file='xflw_stat/ndensq')
       open(newunit=this%units( 4), action='WRITE', form='FORMATTED',          &
         file='xflw_stat/velx')
       open(newunit=this%units( 5), action='WRITE', form='FORMATTED',          &
@@ -212,8 +208,17 @@ contains
         file='xflw_stat/drgy')
       open(newunit=this%units(18), action='WRITE', form='FORMATTED',          &
         file='xflw_stat/drgz')
-      do i = 1, 18
-        write(this%units(i),'(A8,*(e16.6))') ' x ', g%x(g%imin:g%imax)
+      open(newunit=this%units(19), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/press')
+      open(newunit=this%units(20), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/fvelx')
+      open(newunit=this%units(21), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/fvely')
+      open(newunit=this%units(22), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/fvelz')
+      !TODO split this so that x and xm are used appropriately
+      do i = 1, 22
+        write(this%units(i),'(A8,*(E20.6))') ' x ', g%x(g%imin:g%imax)
       end do
     end if
 
@@ -223,29 +228,34 @@ contains
     implicit none
     class(xdepstats), intent(inout) :: this
     class(pgrid), intent(in) :: g
+    integer :: n
 
     if (g%rank .eq. 0) then
 
-      call this%globalmon%write()
+      n = this%step
 
-      write( 1,'(I8,*(e16.6))') this%step, this%num(     g%imin:g%imax)
-      write( 2,'(I8,*(e16.6))') this%step, this%vf(      g%imin:g%imax)
-      write( 3,'(I8,*(e16.6))') this%step, this%vfsq(    g%imin:g%imax)
-      write( 4,'(I8,*(e16.6))') this%step, this%vel(1,   g%imin:g%imax)
-      write( 5,'(I8,*(e16.6))') this%step, this%vel(2,   g%imin:g%imax)
-      write( 6,'(I8,*(e16.6))') this%step, this%vel(3,   g%imin:g%imax)
-      write( 7,'(I8,*(e16.6))') this%step, this%velsq(1, g%imin:g%imax)
-      write( 8,'(I8,*(e16.6))') this%step, this%velsq(2, g%imin:g%imax)
-      write( 9,'(I8,*(e16.6))') this%step, this%velsq(3, g%imin:g%imax)
-      write(10,'(I8,*(e16.6))') this%step, this%slp(1,   g%imin:g%imax)
-      write(11,'(I8,*(e16.6))') this%step, this%slp(2,   g%imin:g%imax)
-      write(12,'(I8,*(e16.6))') this%step, this%slp(3,   g%imin:g%imax)
-      write(13,'(I8,*(e16.6))') this%step, this%slpsq(1, g%imin:g%imax)
-      write(14,'(I8,*(e16.6))') this%step, this%slpsq(2, g%imin:g%imax)
-      write(15,'(I8,*(e16.6))') this%step, this%slpsq(3, g%imin:g%imax)
-      write(16,'(I8,*(e16.6))') this%step, this%drg(1,   g%imin:g%imax)
-      write(17,'(I8,*(e16.6))') this%step, this%drg(2,   g%imin:g%imax)
-      write(18,'(I8,*(e16.6))') this%step, this%drg(3,   g%imin:g%imax)
+      write(this%units( 1),'(I8,*(I20))')   n, this%num(       g%imin:g%imax)
+      write(this%units( 2),'(I8,*(E20.8E3))') n, this%nden(    g%imin:g%imax)
+      write(this%units( 3),'(I8,*(E20.8E3))') n, this%ndensq(  g%imin:g%imax)
+      write(this%units( 4),'(I8,*(E20.8E3))') n, this%vel(1,   g%imin:g%imax)
+      write(this%units( 5),'(I8,*(E20.8E3))') n, this%vel(2,   g%imin:g%imax)
+      write(this%units( 6),'(I8,*(E20.8E3))') n, this%vel(3,   g%imin:g%imax)
+      write(this%units( 7),'(I8,*(E20.8E3))') n, this%velsq(1, g%imin:g%imax)
+      write(this%units( 8),'(I8,*(E20.8E3))') n, this%velsq(2, g%imin:g%imax)
+      write(this%units( 9),'(I8,*(E20.8E3))') n, this%velsq(3, g%imin:g%imax)
+      write(this%units(10),'(I8,*(E20.8E3))') n, this%slp(1,   g%imin:g%imax)
+      write(this%units(11),'(I8,*(E20.8E3))') n, this%slp(2,   g%imin:g%imax)
+      write(this%units(12),'(I8,*(E20.8E3))') n, this%slp(3,   g%imin:g%imax)
+      write(this%units(13),'(I8,*(E20.8E3))') n, this%slpsq(1, g%imin:g%imax)
+      write(this%units(14),'(I8,*(E20.8E3))') n, this%slpsq(2, g%imin:g%imax)
+      write(this%units(15),'(I8,*(E20.8E3))') n, this%slpsq(3, g%imin:g%imax)
+      write(this%units(16),'(I8,*(E20.8E3))') n, this%drg(1,   g%imin:g%imax)
+      write(this%units(17),'(I8,*(E20.8E3))') n, this%drg(2,   g%imin:g%imax)
+      write(this%units(18),'(I8,*(E20.8E3))') n, this%drg(3,   g%imin:g%imax)
+      write(this%units(19),'(I8,*(E20.8E3))') n, this%p(       g%imin:g%imax)
+      write(this%units(20),'(I8,*(E20.8E3))') n, this%fvel(1,  g%imin:g%imax)
+      write(this%units(21),'(I8,*(E20.8E3))') n, this%fvel(2,  g%imin:g%imax)
+      write(this%units(22),'(I8,*(E20.8E3))') n, this%fvel(3,  g%imin:g%imax)
 
     end if
 
@@ -258,17 +268,17 @@ contains
 
     ! monitor falls out of scope and has its own destructor
 
-    do i = 1, 18
+    do i = 1, 22
       close(unit=this%units(i))
     end do
 
-    deallocate(this%num, this%vf, this%vfsq, this%vel, this%velsq, this%slp,  &
-      this%slpsq, this%drg)
+    deallocate(this%num, this%nden, this%ndensq, this%vel, this%velsq,        &
+      this%slp, this%slpsq, this%drg, this%p, this%fvel)
 
   end subroutine xdepstats_destroy
 
 
-  !> macroscopic statistics object
+  !> observation plane statistics object
 
   subroutine xplanestats_init(this, amroot)
     implicit none
@@ -396,23 +406,27 @@ contains
     logical, dimension(sim_pg%nproc) :: in_group_loc, in_group
     type(sgrid) :: obs_sg
     integer :: i, j, k, ierr
+    integer, dimension(3) :: ind
     logical :: prev
     real(WP), dimension(:), allocatable :: xs, ys, zs
 
     ! allocate xs, ys, zs arrays
     allocate(xs(2), ys(ny+1), zs(nz+1))
 
-    ! build sgrid and find overlapping processes
+    ! build sgrid
     xs(1) = offset - 0.5_WP * width
     xs(2) = offset + 0.5_WP * width
     dy = sim_pg%yL / ny; dz = sim_pg%zL / nz;
-    ys(:) = (/ (real(i-1,WP) * dy + sim_pg%y(sim_pg%jmin), i = 1, ny+1) /)
-    zs(:) = (/ (real(i-1,WP) * dz + sim_pg%z(sim_pg%kmin), i = 1, nz+1) /)
+    ys(:) = (/ (real(i,WP) * dy + sim_pg%y(sim_pg%jmin), i = 0, ny) /)
+    zs(:) = (/ (real(i,WP) * dz + sim_pg%z(sim_pg%kmin), i = 0, nz) /)
     obs_sg = sgrid(coord=cartesian, no=0, x=xs, y=ys, z=zs,                   &
       xper=.false., yper=.true., zper=.true., name='XF_OBS_SG')
+
+    ! find middle process
+    ind(:) = sim_pg%get_ijk_global((/ offset, ys(2), zs(2) /))
     in_group_loc(:) = .false.
-    in_group_loc(sim_pg%rank+1) = offset .ge. sim_pg%x(sim_pg%imin_)          &
-      .and. offset .lt. sim_pg%x(sim_pg%imax_+1)
+    in_group_loc(sim_pg%rank+1) = sim_pg%imin_ .le. ind(1)                    &
+      .and. ind(1) .le. sim_pg%imax_
     call mpi_allreduce(in_group_loc, in_group, sim_pg%nproc,                  &
       MPI_LOGICAL, MPI_LOR, sim_pg%comm, ierr)
 
@@ -457,12 +471,14 @@ contains
     integer, dimension(3), intent(in) :: FFTN
     class(lpt), target, intent(in) :: ps            ! lpt with xflow particles
     real(WP), intent(in) :: offset, width
+    character(len=10) :: offsetstr
     integer :: li, hi, lj, hj, lk, hk
 
     ! set basic properties
     this%sim_cfg => sim_cfg
     this%offset = offset
-    write(this%fn, '(A,F10.6)') 'obsplane_', offset
+    write(offsetstr, '(F10.6)') offset
+    this%fn = "obsplane_"//trim(adjustl(offsetstr))
 
     ! check one cell in x
     if (FFTN(1) .ne. 1) call die("[XFS] FFTN(1) must be 1 for xflwstats.")
@@ -483,11 +499,11 @@ contains
 
     ! allocate arrays
     if (this%in_grp) then
-      li = this%pg%imin_; lj = this%pg%jmin_; lk = this%pg%kmin_;
-      hi = this%pg%imax_; hj = this%pg%jmax_; hk = this%pg%kmax_;
+      li = this%pg%imino_; lj = this%pg%jmino_; lk = this%pg%kmino_;
+      hi = this%pg%imaxo_; hj = this%pg%jmaxo_; hk = this%pg%kmaxo_;
       allocate(this%work_c(li:hi,lj:hj,lk:hk), this%work_r(li:hi,lj:hj,lk:hk),&
         this%phi(li:hi,lj:hj,lk:hk), this%phi_x(li:hi,lj:hj,lk:hk),           &
-        this%up(li:hi,lj:hj,lk:hk,3), this%uf(li:hi,lj:hj,lk:hk,3))
+        this%up(li:hi,lj:hj,lk:hk,1:3), this%uf(li:hi,lj:hj,lk:hk,1:3))
     end if
 
   end subroutine obsplane_init
@@ -506,8 +522,8 @@ contains
     real(WP), dimension(this%sim_cfg%imin_:,this%sim_cfg%jmin_:,              &
       this%sim_cfg%kmin_:), intent(in) :: U, V, W
     integer :: n, i, j, k
-    integer, dimension(3) :: ind, dom_n, dom_imin
-    real(WP), dimension(3) :: fvel, dom_c, dom_d
+    integer, dimension(3) :: ind
+    real(WP), dimension(3) :: fvel
     real(WP) :: b, cellvoli, dx, pvol
 
     if (.not. this%in_grp) return
@@ -515,19 +531,13 @@ contains
     ! project particles 
     this%phi(:,:,:) = 0.0_WP; this%phi_x(:,:,:) = 0.0_WP;
     this%up(:,:,:,:) = 0.0_WP; this%uf(:,:,:,:) = 0.0_WP;
-    dom_c = (/ this%pg%x(this%pg%imin), this%pg%y(this%pg%jmin),              &
-      this%pg%z(this%pg%kmin) /)
-    dom_n = (/ this%pg%nx, this%pg%ny, this%pg%nz /)
-    dom_d = (/ this%pg%xL, this%pg%yL, this%pg%zL /) / dom_n
-    dom_imin = (/ this%pg%imin, this%pg%jmin, this%pg%kmin /)
     do n = 1, size(ps)
       pvol = pi * ps(n)%d**3 / 6.0_WP
-      ps(n)%ind = this%sim_cfg%get_ijk_global(ps(n)%pos, ps(n)%ind)
+      ps(n)%ind = this%sim_cfg%get_ijk_global(ps(n)%pos)
       fvel = this%sim_cfg%get_velocity(pos=ps(n)%pos, i0=ps(n)%ind(1),        &
         j0=ps(n)%ind(2), k0=ps(n)%ind(3), U=U, V=V, W=W)
-      ind = int((ps(n)%pos - dom_c) / dom_d) + dom_imin
-      ind(:) = this%pg%get_ijk_global(ps(n)%pos, ind)
-      ind(1) = this%pg%imin_
+      ind(:) = this%pg%get_ijk_global(ps(n)%pos)
+      i = this%pg%imin_; j = ind(2); k = ind(3);
       dx = ps(n)%pos(1) - this%offset
       b = -6.0_WP / flt%params(1)**2
       this%phi(i,j,k) = this%phi(i,j,k) + pvol * exp(b * dx**2)
@@ -594,7 +604,7 @@ contains
 
   !> xflwstats
 
-  subroutine xflwstats_init(this, sim_cfg, filterfile, FFTN, vf, rhof, visc, U, V, W, ps)
+  subroutine xflwstats_init(this, sim_cfg, filterfile, FFTN, vf, rhof, p, visc, U, V, W, ps)
     use param,       only: param_read
     use mpi_f08,     only: mpi_bcast, MPI_REAL, MPI_INTEGER, MPI_CHARACTER,   &
       MPI_LOGICAL, MPI_COMM_WORLD
@@ -608,16 +618,16 @@ contains
     integer, dimension(2), intent(in) :: FFTN
     type(lpt), target, intent(in) :: ps
     real(WP), dimension(sim_cfg%imino_:,sim_cfg%jmino_:,sim_cfg%kmino_:),     &
-      intent(in), target :: vf, rhof, visc, U, V, W
+      intent(in), target :: vf, rhof, p, visc, U, V, W
     real(WP), dimension(:), allocatable :: planelocs, lptwidths
     type(filter_info_row) :: f_info_raw
-    character(len=8) :: istr, nstr
+    character(len=8) :: istr, nstr, ostr
     integer :: i, j, fh, ierr
     logical :: use_slice_io
 
     ! store pointer to simulation config and data
     this%sim_cfg => sim_cfg; this%ps => ps;
-    this%vf => vf; this%rhof => rhof; this%visc => visc;
+    this%vf => vf; this%rhof => rhof; this%p => p; this%visc => visc;
     this%U => U; this%V => V; this%W => W;
 
     ! allocate array of zeros
@@ -626,7 +636,8 @@ contains
     this%zeros(:,:,:) = 0.0_WP
 
     ! set up microscopic statistics
-    call this%mstats%init(sim_cfg%amroot, sim_cfg)
+    !TODO set flag somewhere else for mkdir arg
+    call this%mstats%init(ps%cfg, .true.)
 
     ! read observation plane info
     if (sim_cfg%rank .eq. 0) then
@@ -665,7 +676,7 @@ contains
           case default
             call die("[EC] unknown filter type '"//f_info_raw%typename//"'")
           end select
-          this%filters(j,i)%name = f_info_raw%out_fname
+          this%filters(j,i)%name = 'xflw_'//trim(adjustl(f_info_raw%out_fname))
           this%filters(j,i)%params(:) = f_info_raw%params(:)
         end do
       end do
@@ -719,6 +730,8 @@ contains
     allocate(this%fstats(this%num_planes,this%num_filters))
     do i = 1, this%num_filters
       do j = 1, this%num_planes
+        write(ostr, '(F8.4)') planelocs(j)
+        this%fstats(j,i)%out_fname = 'xflw_obs_'//trim(adjustl(ostr))
         if (this%planes(j)%in_grp)                                            &
           call this%fstats(j,i)%init(this%planes(j)%fft%pg%rank .eq. 0)
       end do
@@ -780,8 +793,8 @@ contains
       lk = this%planes(m)%pg%kmino_; hk = this%planes(m)%pg%kmaxo_;
       allocate(this%planes(m)%phi_io(li:hi,lj:hj,lk:hk,1:this%num_filters),   &
              this%planes(m)%phi_x_io(li:hi,lj:hj,lk:hk,1:this%num_filters),   &
-                this%planes(m)%up_io(li:hi,lj:hj,lk:hk,3,1:this%num_filters), &
-                this%planes(m)%uf_io(li:hi,lj:hj,lk:hk,3,1:this%num_filters))
+             this%planes(m)%up_io(li:hi,lj:hj,lk:hk,1:3,1:this%num_filters),  &
+             this%planes(m)%uf_io(li:hi,lj:hj,lk:hk,1:3,1:this%num_filters))
 
       this%sliceio_setup(m) = .true.
 
@@ -813,28 +826,36 @@ contains
 
   ! computes microscopic statistics along xflow region
   subroutine xflwstats_xdep_stats(this, step)
-    use mpi_f08, only:   mpi_reduce, MPI_SUM, MPI_INTEGER
-    use parallel, only:  MPI_REAL_WP
+    use mathtools, only:  pi
+    use mpi_f08, only:    mpi_reduce, MPI_SUM, MPI_INTEGER
+    use parallel, only:   MPI_REAL_WP
+    use messager, only:   die
     implicit none
     class(xflwstats), intent(inout) :: this
     integer, intent(in) :: step
     integer :: n, i, j, k
-    real(WP) :: opt_dt
+    real(WP) :: opt_dt, slicevol
     integer, dimension(3) :: indmin, indmax
-    real(WP), dimension(3) :: acc, fvel
+    real(WP), dimension(3) :: acc, fvel, velmean
     integer, dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: num
-    real(WP), dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: vf, vfsq
+    real(WP), dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: press
     real(WP), dimension(3,this%ps%cfg%imin:this%ps%cfg%imax) :: vel, velsq,   &
       slp, slpsq, drg
 
     indmin(:) = (/ this%ps%cfg%imin, this%ps%cfg%jmin, this%ps%cfg%kmin /)
     indmax(:) = (/ this%ps%cfg%imax, this%ps%cfg%jmax, this%ps%cfg%kmax /)
 
-    ! store step
+    ! store current step
     this%mstats%step = step
 
+    ! compute mean quantities
+    call this%ps%cfg%integrate(this%U, velmean(1))
+    call this%ps%cfg%integrate(this%V, velmean(2))
+    call this%ps%cfg%integrate(this%W, velmean(3))
+    velmean(:) = velmean(:) / this%ps%cfg%vol_total
+
     ! zero out arrays
-    num(:) = 0.0_WP; vf(:) = 0.0_WP; vfsq(:) = 0.0_WP;
+    num(:) = 0; this%mstats%tmpmesh(:,:,:) = 0.0_WP;
     vel(:,:) = 0.0_WP; velsq(:,:) = 0.0_WP;
     slp(:,:) = 0.0_WP; slpsq(:,:) = 0.0_WP;
     drg(:,:) = 0.0_WP;
@@ -843,12 +864,14 @@ contains
     do n = 1, this%ps%np_
       this%ps%p(n)%ind = this%ps%cfg%get_ijk_global(this%ps%p(n)%pos,         &
         this%ps%p(n)%ind)
-      i = this%ps%p(n)%ind(1); j = this%ps%p(n)%ind(2); k = this%ps%p(n)%ind(3);
-      if (i .lt. this%ps%cfg%imin_) cycle
-      if (i .gt. this%ps%cfg%imax_) cycle
+      i = this%ps%p(n)%ind(1)
+      j = this%ps%p(n)%ind(2)
+      k = this%ps%p(n)%ind(3)
       num(i) = num(i) + 1
-      vel(:,i) = vel(:,i) + this%ps%p(n)%vel
-      velsq(:,i) = velsq(:,i) + this%ps%p(n)%vel**2
+      this%mstats%tmpmesh(i,j,k) = this%mstats%tmpmesh(i,j,k) + 1
+      !vf(i) = vf(i) + pi * this%ps%p(n)%d**3 / 6
+      vel(:,i) = vel(:,i) + (this%ps%p(n)%vel(:) - velmean(:))
+      velsq(:,i) = velsq(:,i) + (this%ps%p(n)%vel(:) - velmean(:))**2
       fvel = this%ps%cfg%get_velocity(pos=this%ps%p(n)%pos, i0=i, j0=j, k0=k, &
         U=this%U, V=this%V, W=this%W)
       slp(:,i) = slp(:,i) + fvel - this%ps%p(n)%vel
@@ -857,39 +880,69 @@ contains
       call this%ps%get_rhs(U=this%U, V=this%V, W=this%W, rho=this%rhof,       &
         visc=this%visc, stress_x=this%zeros, stress_y=this%zeros,             &
         stress_z=this%zeros, p=this%ps%p(n), acc=acc, opt_dt=opt_dt)
-      acc(:) = 0.0_WP
-      drg(:,i) = drg(:,i) + acc
-    end do
-
-    ! compute coarse statistics across simulation grid
-    do k = this%ps%cfg%kmin_, this%ps%cfg%kmax_
-      do j = this%ps%cfg%jmin_, this%ps%cfg%jmax_
-        do i = this%ps%cfg%imin_, this%ps%cfg%imax_
-          vf(i) = vf(i) + this%vf(i,j,k)
-          vfsq(i) = vfsq(i) + this%vf(i,j,k)**2
-        end do
-      end do
+      drg(:,i) = drg(:,i) + acc(:)
     end do
 
     ! collect statistics to root
-    call mpi_reduce(this%mstats%num,   num,   this%ps%cfg%nx,   MPI_INTEGER,  &
+    call mpi_reduce(num,   this%mstats%num,   this%ps%cfg%nx,   MPI_INTEGER,  &
       MPI_SUM, 0, this%ps%cfg%comm)
-    call mpi_reduce(this%mstats%vel,   vel,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+    call mpi_reduce(vel,   this%mstats%vel,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
-    call mpi_reduce(this%mstats%velsq, velsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
+    call mpi_reduce(velsq, this%mstats%velsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
-    call mpi_reduce(this%mstats%slp,   slp,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+    call mpi_reduce(slp,   this%mstats%slp,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
-    call mpi_reduce(this%mstats%slpsq, slpsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
+    call mpi_reduce(slpsq, this%mstats%slpsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
-    call mpi_reduce(this%mstats%drg,   drg,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+    call mpi_reduce(drg,   this%mstats%drg,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
 
-    ! sum particles in xflow region
-    if (this%ps%cfg%rank .eq. 0) this%mstats%ntot = sum(this%mstats%num)
+    ! divide as appropriate
+    if (this%ps%cfg%rank .eq. 0) then
+      do i = this%ps%cfg%imin, this%ps%cfg%imax
+        slicevol = this%ps%cfg%dx(i) * this%ps%cfg%yL * this%ps%cfg%zL
+        this%mstats%nden(i) = this%mstats%num(i) / slicevol
+        this%mstats%ndensq(i) = 0.0_WP
+        do k = this%ps%cfg%kmin, this%ps%cfg%kmax
+          do j = this%ps%cfg%jmin, this%ps%cfg%jmax
+            this%mstats%ndensq(i) = this%mstats%ndensq(i)                     &
+              + real(this%mstats%tmpmesh(i,j,k)**2,WP)
+          end do
+        end do
+        this%mstats%ndensq(i) = this%mstats%ndensq(i) / slicevol
+        if (this%mstats%num(i) .ne. 0) then
+          this%mstats%vel(:,i)   = this%mstats%vel(:,i)   / this%mstats%num(i)
+          this%mstats%velsq(:,i) = this%mstats%velsq(:,i) / this%mstats%num(i)
+          this%mstats%slp(:,i)   = this%mstats%slp(:,i)   / this%mstats%num(i)
+          this%mstats%slpsq(:,i) = this%mstats%slpsq(:,i) / this%mstats%num(i)
+          this%mstats%drg(:,i)   = this%mstats%drg(:,i)   / this%mstats%num(i)
+        end if
+      end do
+    end if
+
+    ! compute continuum stats along x direction
+    vel(:,:) = 0.0_WP; press(:) = 0.0_WP;
+    do k = this%ps%cfg%kmin_, this%ps%cfg%kmax_
+      do j = this%ps%cfg%jmin_, this%ps%cfg%jmax_
+        do i = this%ps%cfg%imin_, this%ps%cfg%imax_
+          vel(1,i) = vel(1,i) + this%U(i,j,k)
+          vel(2,i) = vel(2,i) + this%V(i,j,k)
+          vel(3,i) = vel(3,i) + this%W(i,j,k)
+          press(i) = press(i) + this%p(i,j,k)
+        end do
+      end do
+    end do
+    call mpi_reduce(vel,   this%mstats%fvel, 3*this%ps%cfg%nx, MPI_REAL_WP,   &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(press, this%mstats%p,      this%ps%cfg%nx, MPI_REAL_WP,   &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    if (this%ps%cfg%rank .eq. 0) then
+      this%mstats%fvel = this%mstats%fvel / (this%ps%cfg%ny * this%ps%cfg%nz)
+      this%mstats%p    = this%mstats%p    / (this%ps%cfg%ny * this%ps%cfg%nz)
+    end if
 
     ! write to monitor file
-    call this%mstats%write(this%sim_cfg)
+    call this%mstats%write(this%ps%cfg)
 
   end subroutine xflwstats_xdep_stats
 
@@ -914,6 +967,8 @@ contains
       call this%planes(m)%lptcpl%transfer()
       if (this%planes(m)%in_grp) call this%planes(m)%lptcpl%pull()
 
+      if (.not. this%planes(m)%in_grp) cycle
+
       do n = 1, this%num_filters
 
         ! apply filter
@@ -931,7 +986,7 @@ contains
 
         ! update io and write slice if applicable
         !  !TODO step must be needed somewhere
-        if (this%sliceio_setup(m) .and. this%planes(m)%in_grp) then
+        if (this%sliceio_setup(m)) then
 
           ! update pmesh
           call this%planes(m)%io_pm%reset()
@@ -951,12 +1006,8 @@ contains
           ! update Eulerian fields
           this%planes(m)%phi_io(:,:,:,n)   = this%planes(m)%phi(:,:,:)
           this%planes(m)%phi_x_io(:,:,:,n) = this%planes(m)%phi_x(:,:,:)
-          do i = 1, 3
-            this%planes(m)%up_io(:,:,:,i,n) = this%planes(m)%up(i,:,:,:)
-          end do
-          do i = 1, 3
-            this%planes(m)%uf_io(:,:,:,i,n) = this%planes(m)%uf(i,:,:,:)
-          end do
+          this%planes(m)%up_io(:,:,:,:,n)  = this%planes(m)%up(:,:,:,:)
+          this%planes(m)%uf_io(:,:,:,:,n)  = this%planes(m)%uf(:,:,:,:)
 
         end if
 
@@ -978,13 +1029,13 @@ contains
     type(xplanestats), intent(inout) :: stats
     type(cfourier), intent(inout) :: fft
     real(WP), intent(in) :: phimean
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:),           &
+    real(WP), dimension(fft%pg%imino_:,fft%pg%jmino_:,fft%pg%kmino_:),        &
       intent(in) :: phi, phi_x
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:,1:),        &
+    real(WP), dimension(fft%pg%imino_:,fft%pg%jmino_:,fft%pg%kmino_:,1:),     &
       intent(in) :: up, uf
-    real(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:),           &
+    real(WP), dimension(fft%pg%imino_:,fft%pg%jmino_:,fft%pg%kmino_:),        &
       intent(out) ::  work_r
-    complex(WP), dimension(fft%pg%imin_:,fft%pg%jmin_:,fft%pg%kmin_:),        &
+    complex(WP), dimension(fft%pg%imino_:,fft%pg%jmino_:,fft%pg%kmino_:),     &
       intent(out) :: work_c
     real(WP) :: PC2_loc
     real(WP), dimension(3) :: UB_loc, SB_loc, PCUB_loc, UBPCG_loc
@@ -1007,7 +1058,7 @@ contains
 
     ! compute Reynolds-stress-type terms
     !TODO check this has the correct mean
-    UC2_loc(n,m) = 0.0_WP
+    UC2_loc(:,:) = 0.0_WP
     do n = 1, 3
       do m = n, 3
         work_r(i,:,:) = up(i,:,:,n) * up(i,:,:,m)
@@ -1057,9 +1108,7 @@ contains
     work_c(:,:,:) = phi(:,:,:)
     call fft%ytransform_forward(work_c)
     do k = fft%pg%kmin_, fft%pg%kmax_
-      do i = fft%pg%imin_, fft%pg%imax_
-        work_c(i,:,k) = im * fft%ky(:) * work_c(i,:,k)
-      end do
+      work_c(i,:,k) = im * fft%ky(:) * work_c(i,:,k)
     end do
     call fft%ytransform_backward(work_c)
     work_r(i,:,:) = up(i,:,:,2) * realpart(work_c(i,:,:))
@@ -1067,9 +1116,7 @@ contains
     work_c(:,:,:) = phi(:,:,:)
     call fft%ztransform_forward(work_c)
     do j = fft%pg%jmin_, fft%pg%jmax_
-      do i = fft%pg%imin_, fft%pg%imax_
-        work_c(i,j,:) = im * fft%kz(:) * work_c(i,j,:)
-      end do
+      work_c(i,j,:) = im * fft%kz(:) * work_c(i,j,:)
     end do
     call fft%ztransform_backward(work_c)
     work_r(i,:,:) = up(i,:,:,3) * realpart(work_c(i,:,:))

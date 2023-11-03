@@ -33,6 +33,9 @@ module simulation
   type(periodic_event) :: ens_evt
   logical              :: ens_at_ints
 
+  !> Forcing cutoff
+  real(WP) :: forcingcutofftime
+
   !> Closure Estimation
   type(estimclosures_mesh) :: ec
   type(threshold_event)    :: ec_evt
@@ -196,7 +199,8 @@ contains
 
   !> Initialization of problem solver
   subroutine simulation_init
-    use param, only: param_read
+    use messager, only: log
+    use param, only: param_read, param_exists
     implicit none
 
     ! Before allocating anything, create directories needed for ensight and hitstats output
@@ -227,12 +231,24 @@ contains
       allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
 
+    ! Read forcing cutoff time
+    if (param_exists('Forcing cutoff time')) then
+      call param_read('Forcing cutoff time', forcingcutofftime)
+      call log('Using max cutoff time.')
+    else
+      forcingcutofftime = -1.0_WP
+    end if
+
     ! Initialize time tracker with 2 subiterations
     initialize_timetracker: block
       time=timetracker(amRoot=cfg%amRoot)
       call param_read('Max timestep size',time%dtmax)
       call param_read('Max cfl number',time%cflmax)
       call param_read('Max iter',time%nmax)
+      if (param_exists('Max time')) then
+        call param_read('Max time',time%tmax)
+        call log("Using max time.")
+      end if
       time%dtmin=1e3*epsilon(0.0_WP)
       time%dt=time%dtmax
       time%itmax=2
@@ -598,12 +614,14 @@ contains
           !call compute_stats()
           linear_forcing: block
             real(WP) :: A
-            ! - Eq. (7) (forcing constant TKE)
-            A = (EPSp - (G / FORCE_TIMESCALE) * (TKE - TKE_target)) / (2.0_WP * TKE) * fs%rho
-            ! update residuals
-            resU = resU + time%dt * (fs%U - meanU) * A
-            resV = resV + time%dt * (fs%V - meanV) * A
-            resW = resW + time%dt * (fs%W - meanW) * A
+            if (time%t .lt. forcingcutofftime .or. forcingcutofftime .lt. 0.0_WP) then
+              ! - Eq. (7) (forcing constant TKE)
+              A = (EPSp - (G / FORCE_TIMESCALE) * (TKE - TKE_target)) / (2.0_WP * TKE) * fs%rho
+              ! update residuals
+              resU = resU + time%dt * (fs%U - meanU) * A
+              resV = resV + time%dt * (fs%V - meanV) * A
+              resW = resW + time%dt * (fs%W - meanW) * A
+            end if
           end block linear_forcing
           wt_force%time=wt_force%time+parallel_time()-wt_force%time_in
 

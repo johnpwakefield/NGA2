@@ -894,6 +894,7 @@ contains
       ! Particle response time
       tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
       ! Return acceleration and optimal timestep size
+      !write(*,*) "fvel = ", fvel, ", pvel = ", p%vel, ", tau = ", tau, ", fstress = ", fstress, ", rho = ", this%rho
       acc=(fvel-p%vel)/tau+fstress/this%rho
       opt_dt=tau/real(this%nstep,WP)
     end block compute_drag

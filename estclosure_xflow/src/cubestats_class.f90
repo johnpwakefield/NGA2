@@ -106,9 +106,9 @@ contains
     real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:), optional, intent(out) :: indfield
     real(WP), dimension(fft_pg%imin_:,fft_pg%jmin_:,fft_pg%kmin_:,1:), optional, intent(out) :: pvelfield, fvelfield
     real(WP) :: dp_loc, VF_loc, taup_loc, pvol, cellvoli
-    real(WP), dimension(3) :: VB_loc, slp_loc, drg_loc, slp, drg, fvel, dxdydz
+    real(WP), dimension(3) :: VB_loc, slp_loc, drg_loc, slp, drg, fvel
     real(WP), dimension(6) :: VV_loc, junk
-    integer, dimension(3) :: ind, indmin, indmax
+    integer, dimension(3) :: ind
     integer :: n
 
     ! copy over step and rho
@@ -122,15 +122,31 @@ contains
     if (present(pvelfield)) pvelfield(:,:,:,:) = 0.0_WP
     if (present(fvelfield)) fvelfield(:,:,:,:) = 0.0_WP
 
-    indmin(:) = (/ fft_pg%imin, fft_pg%jmin, fft_pg%kmin /)
-    indmax(:) = (/ fft_pg%imax, fft_pg%jmax, fft_pg%kmax /)
-    dxdydz(:) = (/ fft_pg%dx(indmin(1)), fft_pg%dy(indmin(2)),                &
-      fft_pg%dz(indmin(3)) /)
+    ! relocalize particles
+    do n = 1, ps%np_
+      ps%p(n)%ind = ps%cfg%get_ijk_global(ps%p(n)%pos, ps%p(n)%ind)
+    end do
+    call ps%sync()
+
+    ! check no out of bounds
+    junk(1:3) = 6e66; junk(4:6) = -6e66;
+    do n = 1, ps%np_
+      junk(1:3) = min(ps%p(n)%pos(:), junk(1:3))
+      junk(4:6) = max(ps%p(n)%pos(:), junk(4:6))
+    end do
+    if (fft_pg%x(fft_pg%imin_) .gt. junk(1) .or. junk(4) .gt. fft_pg%x(fft_pg%imax_+1)) then
+      write(*,*) fft_pg%rank, " - x OOB - Processor bds: ", fft_pg%x(fft_pg%imin_), ", ", fft_pg%x(fft_pg%imax_+1), ", Particle bds: ", junk(1), junk(4)
+    end if
+    if (fft_pg%y(fft_pg%jmin_) .gt. junk(2) .or. junk(5) .gt. fft_pg%y(fft_pg%jmax_+1)) then
+      write(*,*) fft_pg%rank, " - y OOB - Processor bds: ", fft_pg%y(fft_pg%jmin_), ", ", fft_pg%y(fft_pg%jmax_+1), ", Particle bds: ", junk(2), junk(5)
+    end if
+    if (fft_pg%z(fft_pg%kmin_) .gt. junk(3) .or. junk(6) .gt. fft_pg%z(fft_pg%kmax_+1)) then
+      write(*,*) fft_pg%rank, " - z OOB - Processor bds: ", fft_pg%z(fft_pg%kmin_), ", ", fft_pg%z(fft_pg%kmax_+1), ", Particle bds: ", junk(3), junk(6)
+    end if
 
     do n = 1, ps%np_
       ps%p(n)%ind = ps%cfg%get_ijk_global(ps%p(n)%pos, ps%p(n)%ind)
-      ind = min(max(floor(ps%p(n)%pos / dxdydz), indmin), indmax)
-      ind = fft_pg%get_ijk_global(ps%p(n)%pos, ind)
+      ind = fft_pg%get_ijk_global(ps%p(n)%pos)
       dp_loc = dp_loc + ps%p(n)%d
       pvol = pi * ps%p(n)%d**3 / 6.0_WP
       VF_loc = VF_loc + pvol
@@ -149,7 +165,7 @@ contains
         stress_y=zeros, stress_z=zeros, p=ps%p(n), acc=drg,                   &
         opt_dt=junk(4))
       drg_loc = drg_loc + drg
-      taup_loc = taup_loc + sum(slp * drg) / sum(drg**2)
+      taup_loc = taup_loc + sum(slp * drg) / (sum(drg**2) + epsilon(drg))
       if (present(indfield)) indfield(ind(1),ind(2),ind(3)) =                 &
         indfield(ind(1),ind(2),ind(3)) + pvol
       if (present(pvelfield)) pvelfield(ind(1),ind(2),ind(3),:) =             &
@@ -240,7 +256,7 @@ contains
     if (fft%oddball) this%flt_f(fft%pg%imin_,fft%pg%jmin_,fft%pg%kmin_) =     &
       (1.0_WP, 0.0_WP)
 
-    this%fstats%out_fname = this%filtername
+    this%fstats%out_fname = 'cube_'//trim(adjustl(this%filtername))
     call this%fstats%init(fft%pg%amroot)
 
   end subroutine filter_init
@@ -383,6 +399,8 @@ contains
       uf(:,:,:,n) = realpart(work_c)
     end do
 
+    !TODO need bounds fixes in here to enable ghost cells if required (or use cfg_integrate)
+
     ! compute PB
     PB_loc = sum(phi)
     call mpi_allreduce(PB_loc, stats%PB, 1, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
@@ -395,7 +413,7 @@ contains
     stats%UB = stats%UB / N3
 
     ! compute Reynolds-stress-type terms
-    UC2_loc(n,m) = 0.0_WP
+    UC2_loc(:,:) = 0.0_WP
     do n = 1, 3
       do m = n, 3
         work_r = up(:,:,:,n) * up(:,:,:,m)
@@ -510,7 +528,7 @@ contains
     this%zeros(:,:,:) = 0.0_WP
 
     ! set up microscopic statistics
-    this%mstats%out_fname = 'microstats'
+    this%mstats%out_fname = 'cube_microstats'
     call this%mstats%init(sim_pg%amroot)
 
     ! setup ffts (they need their own, much finer, pgrid)
@@ -529,8 +547,8 @@ contains
     allocate(this%fft, source=cfourier(this%fft_pg))
 
     ! allocate arrays
-    li = this%fft_pg%imin_; lj = this%fft_pg%jmin_; lk = this%fft_pg%kmin_;
-    hi = this%fft_pg%imax_; hj = this%fft_pg%jmax_; hk = this%fft_pg%kmax_;
+    li = this%fft_pg%imino_; lj = this%fft_pg%jmino_; lk = this%fft_pg%kmino_;
+    hi = this%fft_pg%imaxo_; hj = this%fft_pg%jmaxo_; hk = this%fft_pg%kmaxo_;
     allocate(this%work_r(li:hi,lj:hj,lk:hk), this%work_c(li:hi,lj:hj,lk:hk),  &
       this%phi_in_f(li:hi,lj:hj,lk:hk), this%up_in_f(li:hi,lj:hj,lk:hk,3),    &
       this%uf_in_f(li:hi,lj:hj,lk:hk,3), this%phi(li:hi,lj:hj,lk:hk),         &

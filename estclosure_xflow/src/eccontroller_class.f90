@@ -175,7 +175,7 @@ contains
     call ec%mon%add_column(ec%step,            'step')
     call ec%mon%add_column(ec%time,            'time')
     call ec%mon%add_column(ec%interval,        'interval')
-    call ec%mon%add_column(ec%sweepnum,        'sweep')
+    call ec%mon%add_column(ec%sweepnum,        'sweep'   )
     call ec%mon%add_column(ec%nondm_target(1), 'tgt_Relam' )
     call ec%mon%add_column(ec%nondm_target(2), 'tgt_Stk'   )
     call ec%mon%add_column(ec%nondm_target(3), 'tgt_phiinf')
@@ -186,8 +186,13 @@ contains
     call ec%mon%add_column(ec%nondm_actual(4), 'act_Wovk'  )
     call ec%mon%add_column(ec%dimturb(1),      'urms')
     call ec%mon%add_column(ec%dimturb(2),      'eta' )
-    call ec%mon%add_column(ec%param_target(5), 'nu')
-    call ec%mon%add_column(ec%param_target(7), 'g' )
+    call ec%mon%add_column(ec%param_target(1), 'rhof'     )
+    call ec%mon%add_column(ec%param_target(2), 'rhop'     )
+    call ec%mon%add_column(ec%param_target(5), 'nu'       )
+    call ec%mon%add_column(ec%param_target(6), 'dp'       )
+    call ec%mon%add_column(ec%param_target(7), 'g'        )
+    call ec%mon%add_column(ec%param_target(3), 'ktarget'  )
+    call ec%mon%add_column(ec%param_target(4), 'epstarget')
 
   end subroutine ec_monitor_setup
 

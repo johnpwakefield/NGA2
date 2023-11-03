@@ -5,9 +5,7 @@
 !>  - gravity is in the y direction
 !>  - hitstats collects data in the xy and xz planes
 
-!> TODO put author statement
-
-!> TODO make xflowstats module that does hitstats but for the xflow window
+!> Original draft written by John P Wakefield in the Fall of 2023.
 
 !> TODO functionality in EC
 !> will be moved elsewhere (maybe here, maybe another class).  In a perfect
@@ -19,6 +17,7 @@ module simulation
   use parallel,             only: rank, amroot
   use fft3d_class,          only: fft3d
   use fft2d_class,          only: fft2d
+  use ddadi_class,          only: ddadi
   use incomp_class,         only: incomp
   use timetracker_class,    only: timetracker
   use sgrid_class,          only: sgrid, cartesian
@@ -71,13 +70,16 @@ module simulation
     real(WP), dimension(:,:,:,:), allocatable :: SR
     real(WP), dimension(:,:,:,:,:), allocatable :: gradu
     type(lpt)      :: lp
-    type(monitor)  :: mfile, cflfile, lptfile
+    type(monitor)  :: mfile, cflfile, lptfile, selfile
     type(partmesh) :: pmesh
+    integer, dimension(8) :: sel_part_proc
+    real(WP), dimension(3,8) :: sel_part_pos, sel_part_vel
     type(ensight)  :: ens_out
   end type gendomain
 
   type, extends(gendomain) :: cubedomain
     type(fft3d) :: ps
+    type(ddadi) :: vs
     real(WP) :: urms, TKE, EPS, eta, Re_lambda,                               &
       EPS_ratio, TKE_ratio, ell_ratio, dx_eta, forcingtimescale, Stk, phiinf, &
       Wovk, EPSp
@@ -87,6 +89,7 @@ module simulation
 
   type, extends(gendomain) :: xflowdomain
     type(fft2d) :: ps
+    type(ddadi) :: vs
     type(xflwstats) :: stats
   end type xflowdomain
 
@@ -111,7 +114,7 @@ module simulation
   !> For simplicity, we assume particle diameters, fluid viscosity, and
   !> gravity are equal in both domains.
   real(WP), dimension(7) :: ec_params   ! rhof, rhop, ktarget, epstarget, nu, dp, g
-  real(WP) :: EPS_target, TKE_target, nu, dp, G     ! G is the forcing constant
+  real(WP) :: EPS_target, TKE_target, G     ! G is the forcing constant
 
 
   !> Couplers
@@ -135,7 +138,21 @@ contains
   !> Turbulent statistics and parameters
   !TODO should this be in hitstats?
 
-  subroutine compute_cube_stats()
+  ! Helper function to compute mean velocities
+  subroutine compute_mean_vels(d)
+    implicit none
+    class(gendomain), intent(inout) :: d
+
+    call d%fs%cfg%integrate(A=d%fs%U, integral=d%meanU)
+    d%meanU = d%meanU / d%fs%cfg%vol_total
+    call d%fs%cfg%integrate(A=d%fs%V, integral=d%meanV)
+    d%meanV = d%meanV / d%fs%cfg%vol_total
+    call d%fs%cfg%integrate(A=d%fs%W, integral=d%meanW)
+    d%meanW = d%meanW / d%fs%cfg%vol_total
+
+  end subroutine compute_mean_vels
+
+  subroutine compute_turb_stats()
     use mathtools, only: pi
     use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
     use parallel,  only: MPI_REAL_WP
@@ -143,12 +160,8 @@ contains
     integer :: i, j, k, ierr
 
     ! Compute mean velocities
-    call cube%fs%cfg%integrate(A=cube%fs%U, integral=cube%meanU)
-    cube%meanU = cube%meanU / cube%fs%cfg%vol_total
-    call cube%fs%cfg%integrate(A=cube%fs%V, integral=cube%meanV)
-    cube%meanV = cube%meanV / cube%fs%cfg%vol_total
-    call cube%fs%cfg%integrate(A=cube%fs%W, integral=cube%meanW)
-    cube%meanW = cube%meanW / cube%fs%cfg%vol_total
+    call compute_mean_vels(cube)
+    call compute_mean_vels(xflw)
 
     ! Compute strainrate and grad(u)
     call cube%fs%get_strainrate(SR=cube%SR)
@@ -174,18 +187,18 @@ contains
       end do
     end do
     call MPI_ALLREDUCE(myTKE,cube%TKE,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
-    cube%TKE = cube%TKE / cube%fs%cfg%vol_total
     call MPI_ALLREDUCE(myEPS,cube%EPS,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
-    cube%EPS = cube%EPS / cube%fs%cfg%vol_total
     call MPI_ALLREDUCE(myEPSp,cube%EPSp,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
+    cube%TKE = max(cube%TKE / cube%fs%cfg%vol_total, epsilon(cube%TKE))
+    cube%EPS = max(cube%EPS / cube%fs%cfg%vol_total, epsilon(cube%EPS))
     cube%EPSp = cube%EPSp / (cube%fs%cfg%vol_total * cube%fs%rho)
 
     ! urms
     cube%urms = sqrt(2.0_WP / 3 * cube%TKE)
 
     ! additional monitoring quantities
-    cube%eta = (nu**3 / cube%EPS)**0.25_WP
-    cube%Re_lambda = sqrt(20.0_WP / 3) * cube%TKE * (cube%eta / nu)**2
+    cube%eta = (ec_params(5)**3 / cube%EPS)**0.25_WP
+    cube%Re_lambda = sqrt(20.0_WP / 3) * cube%TKE * (cube%eta / ec_params(5))**2
     cube%EPS_ratio = cube%EPS / EPS_target
     cube%TKE_ratio = cube%TKE / TKE_target
     cube%ell_ratio = (2.0_WP / 3 * cube%TKE)**1.5_WP / cube%EPS / (cube%cfg%vol_total)**(1.0_WP/3)
@@ -198,9 +211,9 @@ contains
     cube%phiinf = cube%lp%np * pi * ec_params(6)**3 /                         &
       (6 * cube%fs%cfg%vol_total)
     cube%Wovk = ec_params(7) * ec_params(2) / ec_params(1) * ec_params(6)**2  &
-      * cube%eta / (18 * nu**2)
+      * cube%eta / (18 * ec_params(5)**2)
 
-  end subroutine compute_cube_stats
+  end subroutine compute_turb_stats
 
   ! params_primit - 7 items - rhof, rhop, ktarget, epstarget, nu, dp, g
   subroutine update_parameters()
@@ -226,21 +239,10 @@ contains
     xflw%lp%gravity(:) = (/ 0.0_WP, -ec_params(7), 0.0_WP /)
 
     ! set xflow velocity
-    call cube%fs%cfg%integrate(A=cube%fs%U, integral=cube%meanU)
-    cube%meanU = cube%meanU / cube%fs%cfg%vol_total
     xflowvel = xflowmult * sqrt(2.0_WP / 3 * ec_params(3))
-    fix_mean_vel: block
-      call cube%fs%cfg%integrate(A=cube%fs%U, integral=cube%meanU)
-      cube%meanU = cube%meanU / cube%fs%cfg%vol_total
-      call xflw%fs%cfg%integrate(A=xflw%fs%U, integral=xflw%meanU)
-      xflw%meanU = xflw%meanU / xflw%fs%cfg%vol_total
-      cube%fs%U(:,:,:) = cube%fs%U(:,:,:) + (xflowvel - cube%meanU)
-      xflw%fs%U(:,:,:) = xflw%fs%U(:,:,:) + (xflowvel - xflw%meanU)
-    end block fix_mean_vel
 
     ! store parameters that are difficult to access for reference elsewhere
     TKE_target = ec_params(3); EPS_target = ec_params(4);
-    nu = ec_params(5); dp = ec_params(6);
 
     ! print current parameters
     print_statistics: block
@@ -252,23 +254,23 @@ contains
         write(message,'("    Fluid density: ",e12.6)') cube%fs%rho; call log(message);
         write(message,'("    Target TKE: ",e12.6)') TKE_target; call log(message);
         write(message,'("    Target EPS: ",e12.6)') EPS_target; call log(message);
-        write(message,'("    Kinematic Viscosity: ",e12.6)') nu; call log(message);
+        write(message,'("    Kinematic Viscosity: ",e12.6)') ec_params(5); call log(message);
       end if
     end block print_statistics
 
   end subroutine update_parameters
 
-  subroutine init_vel(fs, ktarget, resU, resV, resW, mask)
+  subroutine init_vel(fs, ktarget, resU, resV, resW, meanU, meanV, meanW, mask)
     use random,    only: random_normal
     use mpi_f08,   only: mpi_allreduce, mpi_sum
     use mathtools, only: pi
     class(incomp), intent(inout) :: fs
     real(WP), intent(in) :: ktarget
     real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: resU, resV, resW
+    real(WP), intent(out) :: meanU, meanV, meanW
     real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(in), optional :: mask
     real(WP) :: urms0
-    real(WP), dimension(3) :: ubar
-    integer :: i,j,k
+    integer :: i, j, k
 
     ! Gaussian initial field
     urms0 = sqrt(2.0_WP / 3 * ktarget)
@@ -286,12 +288,15 @@ contains
     end do
     call fs%cfg%sync(fs%U); call fs%cfg%sync(fs%V); call fs%cfg%sync(fs%W);
 
-    ! Compute mean and remove it from the velocity field
-    call fs%cfg%integrate(A=fs%U, integral=ubar(1))
-    call fs%cfg%integrate(A=fs%V, integral=ubar(2))
-    call fs%cfg%integrate(A=fs%W, integral=ubar(3))
-    ubar(:) = ubar(:) / fs%cfg%vol_total
-    fs%U = fs%U - ubar(1); fs%V = fs%V - ubar(2); fs%W = fs%W - ubar(3);
+    ! Set correct mean velocity
+    call fs%cfg%integrate(A=fs%U, integral=meanU)
+    call fs%cfg%integrate(A=fs%V, integral=meanV)
+    call fs%cfg%integrate(A=fs%W, integral=meanW)
+    meanU = meanU / fs%cfg%vol_total
+    meanV = meanV / fs%cfg%vol_total
+    meanW = meanW / fs%cfg%vol_total
+    fs%U = fs%U - meanU + xflowvel
+    fs%V = fs%V - meanV; fs%W = fs%W - meanW;
 
     ! Project to divergence-free space
     call fs%get_div()
@@ -357,6 +362,8 @@ contains
   subroutine setup_gendom_monitors(d)
     implicit none
     class(gendomain), intent(inout) :: d
+    integer :: i
+    character(len=str_medium) :: clabel
 
     ! Create simulation monitor
     d%mfile = monitor(d%fs%cfg%amRoot, trim(d%desc) // '_simulation')
@@ -391,18 +398,35 @@ contains
     ! Create LPT monitor
     call d%lp%get_max()
     d%lptfile = monitor(d%lp%cfg%amRoot, trim(d%desc) // '_lpt')
-    call d%lptfile%add_column(time%n,'Timestep number')
-    call d%lptfile%add_column(time%t,'Time')
-    call d%lptfile%add_column(d%lp%np,'Particle number')
-    call d%lptfile%add_column(d%lp%Umin,'Particle Umin')
-    call d%lptfile%add_column(d%lp%Umax,'Particle Umax')
-    call d%lptfile%add_column(d%lp%Vmin,'Particle Vmin')
-    call d%lptfile%add_column(d%lp%Vmax,'Particle Vmax')
-    call d%lptfile%add_column(d%lp%Wmin,'Particle Wmin')
-    call d%lptfile%add_column(d%lp%Wmax,'Particle Wmax')
-    call d%lptfile%add_column(d%lp%dmin,'Particle dmin')
-    call d%lptfile%add_column(d%lp%dmax,'Particle dmax')
+    call d%lptfile%add_column(time%n,    'Timestep number')
+    call d%lptfile%add_column(time%t,    'Time')
+    call d%lptfile%add_column(d%lp%np,   'Particle number')
+    call d%lptfile%add_column(d%lp%Umin, 'Particle Umin')
+    call d%lptfile%add_column(d%lp%Umean,'Particle Umean')
+    call d%lptfile%add_column(d%lp%Umax, 'Particle Umax')
+    call d%lptfile%add_column(d%lp%Vmin, 'Particle Vmin')
+    call d%lptfile%add_column(d%lp%Vmean,'Particle Vmean')
+    call d%lptfile%add_column(d%lp%Vmax, 'Particle Vmax')
+    call d%lptfile%add_column(d%lp%Wmin, 'Particle Wmin')
+    call d%lptfile%add_column(d%lp%Wmean,'Particle Wmean')
+    call d%lptfile%add_column(d%lp%Wmax, 'Particle Wmax')
+    call d%lptfile%add_column(d%lp%dmin, 'Particle dmin')
+    call d%lptfile%add_column(d%lp%dmax, 'Particle dmax')
     call d%lptfile%write()
+
+    ! Create monitor for selected particle velocities
+    d%selfile = monitor(d%lp%cfg%amRoot, trim(d%desc) // '_sel')
+    call d%selfile%add_column(time%n, 'Timestep number')
+    call d%selfile%add_column(time%t, 'Time')
+    do i = 1, 8
+      write(clabel, '(A,I0.2,A)') 'p_', i, '_velx'
+      call d%selfile%add_column(d%sel_part_vel(1,i), trim(clabel))
+      write(clabel, '(A,I0.2,A)') 'p_', i, '_vely'
+      call d%selfile%add_column(d%sel_part_vel(2,i), trim(clabel))
+      write(clabel, '(A,I0.2,A)') 'p_', i, '_velz'
+      call d%selfile%add_column(d%sel_part_vel(3,i), trim(clabel))
+    end do
+    call d%selfile%write()
 
   end subroutine setup_gendom_monitors
 
@@ -427,6 +451,47 @@ contains
 
   end subroutine setup_hitcube_monitors
 
+  subroutine collect_selected_particles(d)
+    use mpi_f08,  only: mpi_allreduce, mpi_reduce, MPI_INTEGER, MPI_MAX, MPI_SUM
+    use parallel, only: MPI_REAL_WP
+    implicit none
+    class(gendomain), intent(inout) :: d
+    integer :: i, myproc
+    real(WP), dimension(3,8) :: part_pos_loc, part_vel_loc
+    integer, dimension(8) :: part_proc_loc
+
+    part_proc_loc(:) = 0
+    myproc = (d%cfg%iproc - 1) * d%cfg%npx * d%cfg%npy + (d%cfg%jproc - 1) *  &
+      d%cfg%npy + d%cfg%kproc
+    do i = 1, d%lp%np_
+      if (1 .gt. d%lp%p(i)%id .or. d%lp%p(i)%id .gt. 8) cycle
+      if (part_proc_loc(d%lp%p(i)%id) .ne. 0) then
+        if (d%lp%p(i)%pos(1) .gt. part_pos_loc(1,d%lp%p(i)%id)) cycle
+      end if
+      part_proc_loc(d%lp%p(i)%id) = myproc
+      part_pos_loc(:,d%lp%p(i)%id) = d%lp%p(i)%pos(:)
+      part_vel_loc(:,d%lp%p(i)%id) = d%lp%p(i)%vel(:)
+    end do
+    call mpi_allreduce(part_proc_loc, d%sel_part_proc, 8, MPI_INTEGER, MPI_MAX, d%cfg%comm)
+    do i = 1, 8
+      if (d%sel_part_proc(i) .ne. myproc) then
+        part_pos_loc(:,i) = 0.0_WP
+        part_vel_loc(:,i) = 0.0_WP
+      end if
+    end do
+    call mpi_reduce(part_pos_loc, d%sel_part_pos, 3*8, MPI_REAL_WP, MPI_SUM, 0, d%cfg%comm)
+    call mpi_reduce(part_vel_loc, d%sel_part_vel, 3*8, MPI_REAL_WP, MPI_SUM, 0, d%cfg%comm)
+    if (d%cfg%rank .eq. 0) then
+      do i = 1, 8
+        if (d%sel_part_proc(i) .eq. 0) then
+          d%sel_part_pos(:,i) = -6e66_WP
+          d%sel_part_vel(:,i) = -6e66_WP
+        end if
+      end do
+    end if
+
+  end subroutine collect_selected_particles
+
   subroutine write_gendom_monitors(d)
     implicit none
     class(gendomain), intent(inout) :: d
@@ -436,6 +501,7 @@ contains
     call d%mfile%write()
     call d%cflfile%write()
     call d%lptfile%write()
+    call d%selfile%write()
 
   end subroutine write_gendom_monitors
 
@@ -449,7 +515,6 @@ contains
 
 
   !> Initialization of each domain
-  !TODO fix geometry dims, overlap, etc
 
   subroutine geometry_cube_init()
     use parallel, only: group
@@ -514,6 +579,9 @@ contains
     integer, intent(in) :: i, j, k
     logical :: flag
 
+    if (.false.) flag = j .eq. -999
+    if (.false.) flag = k .eq. -999
+
     flag = i .eq. pg%imin
 
   end function xflow_inflow_locator
@@ -524,7 +592,10 @@ contains
     integer, intent(in) :: i, j, k
     logical :: flag
 
-    flag = i .eq. pg%imax_+1
+    if (.false.) flag = j .eq. -999
+    if (.false.) flag = k .eq. -999
+
+    flag = i .eq. pg%imax+1
 
   end function xflow_outflow_locator
 
@@ -629,20 +700,18 @@ contains
 
     ! Create a single-phase flow solvers
     create_and_initialize_flow_solver: block
-      use hypre_str_class, only: pcg_pfmg
       use incomp_class,    only: dirichlet, clipped_neumann
 
       ! Cube
-      !TODO PROVIDE DDADI IMPLICIT VEL SOLVEER
       cube%fs = incomp(cfg=cube%cfg, name='NS solver')
       cube%fs%visc(:,:,:) = ec_params(1) * ec_params(5)
-      cube%ps = fft3d(cfg=cube%cfg, name='Pressure', nst=7)
-      call cube%fs%setup(pressure_solver=cube%ps)
+      cube%ps = fft3d(cfg=cube%cfg, name='cube_pressure', nst=7)
+      cube%vs = ddadi(cfg=cube%cfg, name='cube_velocity', nst=7)
+      call cube%fs%setup(pressure_solver=cube%ps, implicit_solver=cube%vs)
       cube%fs%rho = ec_params(1)
       cube%rho(:,:,:) = ec_params(1)
 
       ! XFlow
-      !TODO PROVIDE DDADI IMPLICIT VEL SOLVEER
       xflw%fs = incomp(cfg=xflw%cfg, name='NS solver')
       xflw%fs%visc(:,:,:) = ec_params(1) * ec_params(5)
       xflw%fs%rho = ec_params(1)
@@ -651,8 +720,9 @@ contains
         dir=-1, canCorrect=.false., locator=xflow_inflow_locator)
       call xflw%fs%add_bcond(name='outflow', type=clipped_neumann, face='x',  &
         dir=+1, canCorrect=.true., locator=xflow_outflow_locator)
-      xflw%ps = fft2d(cfg=xflw%cfg, name='Pressure', nst=7)
-      call xflw%fs%setup(pressure_solver=xflw%ps)
+      xflw%ps = fft2d(cfg=xflw%cfg, name='xflw_pressure', nst=7)
+      xflw%vs = ddadi(cfg=xflw%cfg, name='xflw_velocity', nst=7)
+      call xflw%fs%setup(pressure_solver=xflw%ps, implicit_solver=xflw%vs)
 
     end block create_and_initialize_flow_solver
     if (amroot) call log("Initialized flow solver.")
@@ -660,18 +730,14 @@ contains
     ! Initialize LPT in cube
     initialize_lpt_cube: block
       use random, only: random_uniform, random_normal
-      integer :: i, Np
-      integer, dimension(3) :: idx0, idx
+      integer :: i
       real(WP) :: xl, xh, yl, yh, zl, zh
 
       ! Create solver
       cube%lp = lpt(cfg=cube%cfg, name='Cube LPT')
 
-      ! Get drag model from the input
+      ! Get params from input
       call param_read('Drag model', cube%lp%drag_model, default='Schiller-Naumann')
-
-      ! Get number of particles
-      call param_read('Number of particles', Np)
 
       ! set filter width
       cube%lp%filter_width = FILTER_MESH_RATIO * cube%cfg%min_meshsize
@@ -686,11 +752,10 @@ contains
       yh = cube%lp%cfg%y(cube%lp%cfg%jmax+1)
       zl = cube%lp%cfg%z(cube%lp%cfg%kmin)
       zh = cube%lp%cfg%z(cube%lp%cfg%kmax+1)
-      idx0(:) = (/ cube%lp%cfg%imin, cube%lp%cfg%jmin, cube%lp%cfg%kmin /)
 
       if (cube%lp%cfg%amRoot) then
-        call cube%lp%resize(Np)
-        do i = 1, Np
+        call cube%lp%resize(ec%Np)
+        do i = 1, ec%Np
           ! Give id
           cube%lp%p(i)%id = int(i, 8)
           ! Set the diameter
@@ -699,12 +764,11 @@ contains
           cube%lp%p(i)%pos = (/ random_uniform(xl, xh),                       &
             random_uniform(yl, yh), random_uniform(zl, zh) /)
           ! Locate the particle on the mesh
-          cube%lp%p(i)%ind = cube%lp%cfg%get_ijk_global(cube%lp%p(i)%pos, idx0)
+          cube%lp%p(i)%ind = cube%lp%cfg%get_ijk_global(cube%lp%p(i)%pos)
           ! Give equilibrium velocity
-          idx(:) = cube%lp%p(i)%ind(:)
           cube%lp%p(i)%vel(:) = cube%cfg%get_velocity(pos=cube%lp%p(i)%pos,   &
-            i0=idx(1), j0=idx(2), k0=idx(3), U=cube%fs%U, V=cube%fs%V,        &
-            W=cube%fs%W)
+            i0=cube%lp%p(i)%ind(1), j0=cube%lp%p(i)%ind(2),                   &
+            k0=cube%lp%p(i)%ind(3), U=cube%fs%U, V=cube%fs%V, W=cube%fs%W)
           ! Activate the particle
           cube%lp%p(i)%flag = 0
         end do
@@ -732,27 +796,13 @@ contains
       xflw%lp%filter_width = cube%lp%filter_width
       xflw%lp%rho = cube%lp%rho
 
-      if (xflw%lp%cfg%amRoot) then
-        call xflw%lp%resize(1)
-        xflw%lp%p(1)%id = int(666, 8)
-        xflw%lp%p(1)%d = ec_params(6)
-        xflw%lp%p(1)%pos = (/ 0.8_WP * xflw%cfg%xL, 0.3_WP * xflw%cfg%yL,       &
-          0.3_WP * xflw%cfg%zL /)
-        xflw%lp%p(1)%ind = (/ xflw%cfg%imax-2, xflw%cfg%jmin+1, xflw%cfg%kmin+1 /)
-        xflw%lp%p(1)%ind = xflw%lp%cfg%get_ijk_global(xflw%lp%p(1)%pos,         &
-          xflw%lp%p(1)%ind)
-        xflw%lp%p(1)%vel(:) = xflw%cfg%get_velocity(pos=xflw%lp%p(1)%pos,       &
-          i0=xflw%lp%p(1)%ind(1), j0=xflw%lp%p(1)%ind(2),                       &
-          k0=xflw%lp%p(1)%ind(3), U=xflw%fs%U, V=xflw%fs%V, W=xflw%fs%W)
-        xflw%lp%p(1)%flag = 3
-      else
-        call xflw%lp%resize(0)
-      end if
+      call xflw%lp%resize(0)
       call xflw%lp%sync()
       call xflw%lp%update_VF()
 
+      if (amroot) call log("Initialized xflow LPT.")
+
     end block initialize_lpt_xflow
-    if (amroot) call log("Initialized xflow LPT.")
 
     ! Set up cubestats and xflwstats
     initialize_statsobjs: block
@@ -768,7 +818,8 @@ contains
       call cube%stats%setup_sliceio()
       if (amroot) call log("Initialized cube statistics object.")
       call xflw%stats%init(xflw%cfg, filterfile, xflowFFTN, xflw%cfg%VF,      &
-        xflw%rho, xflw%fs%visc, xflw%fs%U, xflw%fs%V, xflw%fs%W, xflw%lp)
+        xflw%rho, xflw%fs%P, xflw%fs%visc, xflw%fs%U, xflw%fs%V, xflw%fs%W,   &
+        xflw%lp)
       call xflw%stats%sliceio_init()
       if (amroot) call log("Initialized xflow statistics object.")
     end block initialize_statsobjs
@@ -798,25 +849,28 @@ contains
     if (amroot) call log("Initialized domain couplers.")
 
     ! prepare initial velocity fields
-    call init_vel(cube%fs, ec_params(3), cube%resU, cube%resV, cube%resW)
-    !call init_vel(xflw%fs, ec_params(3), xflw%resU, xflw%resV, xflw%resW,     &
-    !  mask=dom_cpl%overlap)
-    xflw%fs%U(:,:,:) = 0.0_WP
-    xflw%fs%V(:,:,:) = 0.0_WP
-    xflw%fs%W(:,:,:) = 0.0_WP
+    call init_vel(cube%fs, ec_params(3), cube%resU, cube%resV, cube%resW,     &
+      cube%meanU, cube%meanV, cube%meanW)
+    call init_vel(xflw%fs, ec_params(3), xflw%resU, xflw%resV, xflw%resW,     &
+      xflw%meanU, xflw%meanV, xflw%meanW, mask=dom_cpl%overlap)
     if (amroot) call log("Initial velocity fields prepared.")
+
+    ! initial boundary update
+    call update_xflw_f_bc()
+    call update_xflw_p_bc()
 
     ! calculate divergence
     call cube%fs%get_div()
+    call xflw%fs%get_div()
 
     ! calculate stress
-
+    !TODO (needed?)
 
     ! update parameters to print logging information
     call update_parameters()
 
     ! Compute initial turbulence stats
-    call compute_cube_stats()
+    call compute_turb_stats()
 
     ! Set up ensight output
     call setup_ens(cube)
@@ -857,6 +911,8 @@ contains
       call xflw%fs%get_max()
 
       ! Initialize monitor files
+      call collect_selected_particles(cube)
+      call collect_selected_particles(xflw)
       call setup_gendom_monitors(cube)
       call setup_hitcube_monitors(cube)
       call setup_gendom_monitors(xflw)
@@ -906,191 +962,267 @@ contains
   end subroutine simulation_init
 
   !> Time integrate our problem
+  subroutine cube_step()
+    use parallel,            only: parallel_time
+    use eccontroller_class,  only: FORCE_TIMESCALE
+    implicit none
+    integer :: it
+
+    ! store old velocity
+    cube%fs%Uold = cube%fs%U
+    cube%fs%Vold = cube%fs%V
+    cube%fs%Wold = cube%fs%W
+
+    ! collide and advance particles
+    wt_cube_lpt%time_in = parallel_time()
+    !call cube%lp%collide(dt=time%dtmid)
+    call cube%lp%advance(dt=time%dtmid, U=cube%fs%U, V=cube%fs%V,             &
+      W=cube%fs%W, rho=cube%rho, visc=cube%fs%visc)
+    wt_cube_lpt%time = wt_cube_lpt%time + parallel_time() - wt_cube_lpt%time_in
+
+    ! perform sub-iterations
+    do it = 1, time%itmax
+
+      wt_cube_vel%time_in = parallel_time()
+
+      ! build mid-time velocity and momentum
+      cube%fs%U = 0.5_WP * (cube%fs%U + cube%fs%Uold)
+      cube%fs%V = 0.5_WP * (cube%fs%V + cube%fs%Vold)
+      cube%fs%W = 0.5_WP * (cube%fs%W + cube%fs%Wold)
+
+      ! explicit calculation of drho*u/dt from NS
+      call cube%fs%get_dmomdt(cube%resU, cube%resV, cube%resW)
+
+      ! assemble explicit residual
+      cube%resU = time%dt * cube%resU - 2.0_WP * cube%fs%rho * (cube%fs%U - cube%fs%Uold)
+      cube%resV = time%dt * cube%resV - 2.0_WP * cube%fs%rho * (cube%fs%V - cube%fs%Vold)
+      cube%resW = time%dt * cube%resW - 2.0_WP * cube%fs%rho * (cube%fs%W - cube%fs%Wold)
+
+      ! form implicit residuals
+      call cube%fs%solve_implicit(time%dt, cube%resU, cube%resV, cube%resW)
+
+      ! linear forcing term (Bassenne et al. 2016)
+      wt_force%time_in = parallel_time()
+      call compute_turb_stats()
+      linear_forcing: block
+        real(WP) :: A
+        ! - Eq. (7) (forcing constant TKE)
+        A = (cube%EPSp - (G / FORCE_TIMESCALE) * (cube%TKE -              &
+          TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
+        !A = (cube%EPS - (G / FORCE_TIMESCALE) * (cube%TKE -               &
+        !  TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
+        ! update residuals
+        cube%resU = cube%resU + time%dt * A * (cube%fs%U - cube%meanU)
+        cube%resV = cube%resV + time%dt * A * (cube%fs%V - cube%meanV)
+        cube%resW = cube%resW + time%dt * A * (cube%fs%W - cube%meanW)
+      end block linear_forcing
+      wt_force%time = wt_force%time + parallel_time() - wt_force%time_in
+
+      ! apply these residuals
+      cube%fs%U = 2.0_WP * cube%fs%U - cube%fs%Uold + cube%resU
+      cube%fs%V = 2.0_WP * cube%fs%V - cube%fs%Vold + cube%resV
+      cube%fs%W = 2.0_WP * cube%fs%W - cube%fs%Wold + cube%resW
+
+      ! apply bcs
+      call cube%fs%apply_bcond(time%t, time%dt)
+
+      wt_cube_vel%time = wt_cube_vel%time + parallel_time() - wt_cube_vel%time_in
+
+      ! solve Poisson equation
+      wt_cube_pres%time_in = parallel_time()
+      call cube%fs%get_mfr()
+      call cube%fs%correct_mfr()
+      call cube%fs%get_div()
+      cube%fs%psolv%rhs = (-cube%fs%rho / time%dt * cube%fs%cfg%vol) * cube%fs%div
+      !cube%fs%psolv%sol = 0.0_WP
+      call cube%fs%psolv%solve()
+      call cube%fs%shift_p(cube%fs%psolv%sol)
+
+      ! correct velocity
+      call cube%fs%get_pgrad(cube%fs%psolv%sol, cube%resU, cube%resV, cube%resW)
+      cube%fs%P = cube%fs%P + cube%fs%psolv%sol
+      cube%fs%U = cube%fs%U - (time%dt / cube%fs%rho) * cube%resU
+      cube%fs%V = cube%fs%V - (time%dt / cube%fs%rho) * cube%resV
+      cube%fs%W = cube%fs%W - (time%dt / cube%fs%rho) * cube%resW
+      wt_cube_pres%time = wt_cube_pres%time + parallel_time() - wt_cube_pres%time_in
+
+    end do
+
+    ! recompute interpolated velocity and divergence
+    wt_cube_vel%time_in = parallel_time()
+    call cube%fs%interp_vel(cube%Ui, cube%Vi, cube%Wi)
+    call cube%fs%get_div()
+    !TODO if we need vorticity uncomment
+    !call this%fs%get_vorticity(this%vort)
+    wt_cube_vel%time = wt_cube_vel%time + parallel_time() - wt_cube_vel%time_in
+
+    ! re-flag particles within the acceptable range as copyable
+    reset_particle_flags: block
+      integer :: i
+      do i = 1, cube%lp%np_
+        if (part_reset_bdrys(1) .lt. cube%lp%p(i)%pos(1) .and.                &
+          part_reset_bdrys(2) .gt. cube%lp%p(i)%pos(1) .and.                  &
+          cube%lp%p(i)%flag .eq. 2) then
+          cube%lp%p(i)%flag = 0
+        end if
+      end do
+    end block reset_particle_flags
+
+  end subroutine cube_step
+
+  subroutine xflw_step()
+    use parallel,            only: parallel_time
+    implicit none
+    integer :: it
+
+    ! store old velocity
+    xflw%fs%Uold = xflw%fs%U
+    xflw%fs%Vold = xflw%fs%V
+    xflw%fs%Wold = xflw%fs%W
+
+    ! collide and advance particles
+    wt_xflw_lpt%time_in = parallel_time()
+    !call xflw%lp%collide(dt=time%dtmid)
+    call xflw%lp%advance(dt=time%dtmid, U=xflw%fs%U, V=xflw%fs%V,             &
+      W=xflw%fs%W, rho=xflw%rho, visc=xflw%fs%visc)
+    wt_xflw_lpt%time = wt_xflw_lpt%time + parallel_time() - wt_xflw_lpt%time_in
+
+    ! perform sub-iterations
+    do it = 1, time%itmax
+
+      wt_xflw_vel%time_in = parallel_time()
+
+      ! build mid-time velocity and momentum
+      xflw%fs%U = 0.5_WP * (xflw%fs%U + xflw%fs%Uold)
+      xflw%fs%V = 0.5_WP * (xflw%fs%V + xflw%fs%Vold)
+      xflw%fs%W = 0.5_WP * (xflw%fs%W + xflw%fs%Wold)
+
+      ! explicit calculation of drho*u/dt from NS
+      call xflw%fs%get_dmomdt(xflw%resU, xflw%resV, xflw%resW)
+
+      ! assemble explicit residual
+      xflw%resU = time%dt * xflw%resU - 2.0_WP * xflw%fs%rho * (xflw%fs%U - xflw%fs%Uold)
+      xflw%resV = time%dt * xflw%resV - 2.0_WP * xflw%fs%rho * (xflw%fs%V - xflw%fs%Vold)
+      xflw%resW = time%dt * xflw%resW - 2.0_WP * xflw%fs%rho * (xflw%fs%W - xflw%fs%Wold)
+
+      ! form implicit residuals
+      call xflw%fs%solve_implicit(time%dt, xflw%resU, xflw%resV, xflw%resW)
+
+      ! apply these residuals
+      xflw%fs%U = 2.0_WP * xflw%fs%U - xflw%fs%Uold + xflw%resU
+      xflw%fs%V = 2.0_WP * xflw%fs%V - xflw%fs%Vold + xflw%resV
+      xflw%fs%W = 2.0_WP * xflw%fs%W - xflw%fs%Wold + xflw%resW
+
+      ! apply other boundary conditions and update momentum
+      call xflw%fs%apply_bcond(time%t, time%dt)
+
+      wt_xflw_vel%time = wt_xflw_vel%time + parallel_time() - wt_xflw_vel%time_in
+
+      ! solve Poisson equation
+      wt_xflw_pres%time_in = parallel_time()
+      call xflw%fs%get_mfr()
+      call xflw%fs%correct_mfr()
+      call xflw%fs%get_div()
+      xflw%fs%psolv%rhs = (-xflw%fs%rho / time%dt) * xflw%fs%cfg%vol * xflw%fs%div
+      !xflw%fs%psolv%sol = 0.0_WP
+      call xflw%fs%psolv%solve()
+      call xflw%fs%shift_p(xflw%fs%psolv%sol)
+
+      ! correct momentum and rebuild velocity
+      call xflw%fs%get_pgrad(xflw%fs%psolv%sol, xflw%resU, xflw%resV, xflw%resW)
+      xflw%fs%P = xflw%fs%P + xflw%fs%psolv%sol
+      xflw%fs%U = xflw%fs%U - time%dt / xflw%fs%rho * xflw%resU
+      xflw%fs%V = xflw%fs%V - time%dt / xflw%fs%rho * xflw%resV
+      xflw%fs%W = xflw%fs%W - time%dt / xflw%fs%rho * xflw%resW
+      wt_xflw_pres%time = wt_xflw_pres%time + parallel_time() - wt_xflw_pres%time_in
+
+    end do
+
+    ! recompute interpolated velocity and divergence
+    wt_xflw_vel%time_in = parallel_time()
+    call xflw%fs%interp_vel(xflw%Ui, xflw%Vi, xflw%Wi)
+    call xflw%fs%get_div()
+    !TODO uncomment when we need vorticity
+    !call xflw%fs%get_vorticity(xflw%vort)
+    wt_xflw_vel%time = wt_xflw_vel%time + parallel_time() - wt_xflw_vel%time_in
+
+  end subroutine xflw_step
+
+  subroutine update_xflw_f_bc()
+    use mpi_f08, only: mpi_allreduce, MPI_SUM
+    use parallel, only: MPI_REAL_WP
+    implicit none
+    real(WP) :: l_ubar, g_ubar
+    integer :: li, hi, lj, hj, lk, hk
+
+    call dom_cpl%push(cube%fs%U)
+    call dom_cpl%transfer()
+    call dom_cpl%pull(xflw%resU)
+    call dom_cpl%push(cube%fs%V)
+    call dom_cpl%transfer()
+    call dom_cpl%pull(xflw%resV)
+    call dom_cpl%push(cube%fs%W)
+    call dom_cpl%transfer()
+    call dom_cpl%pull(xflw%resW)
+
+    if (xflw%cfg%imin .eq. xflw%cfg%imin_) then
+      li = xflw%cfg%imino_; hi = xflw%cfg%imin_;
+      lj = xflw%cfg%jmin_; hj = xflw%cfg%jmax_;
+      lk = xflw%cfg%kmin_; hk = xflw%cfg%kmax_;
+      l_ubar = sum(xflw%resU(hi,lj:hj,lk:hk))
+      call mpi_allreduce(l_ubar, g_ubar, 1, MPI_REAL_WP, MPI_SUM, xflw%cfg%yzcomm)
+      g_ubar = g_ubar / (xflw%cfg%ny * xflw%cfg%nz)
+      xflw%resU(li:hi,:,:) = xflw%resU(li:hi,:,:) + (xflowvel - g_ubar)
+      xflw%fs%U(li:hi,:,:) = xflw%resU(li:hi,:,:)
+      xflw%fs%V(li:hi-1,:,:) = xflw%resV(li:hi-1,:,:)
+      xflw%fs%W(li:hi-1,:,:) = xflw%resW(li:hi-1,:,:)
+    end if
+
+  end subroutine update_xflw_f_bc
+
+  subroutine update_xflw_p_bc()
+    implicit none
+
+    call dom_lptcpl%push()
+    call dom_lptcpl%transfer()
+    call dom_lptcpl%pull()
+
+  end subroutine update_xflw_p_bc
+
   subroutine simulation_run
     use messager,            only: die
     use parallel,            only: parallel_time
     use eccontroller_class,  only: FORCE_TIMESCALE
     implicit none
-    integer :: it
 
     ! Perform time integration
     do while (.not. (time%done() .or. ec_done))
 
       do while (.not. ec_evt%occurs())
 
-        !TODO subiterate the cube and the crossflow separately
-        !TODO the right way to do this is probably just to write a step routine that take domain objects (and has its own
-        !subiteration counter), then call it for both objects
+        ! Wallclock
+        wt_total%time_in = parallel_time()
 
-        !! Wallclock
-        wt_total%time_in=parallel_time()
-
-        !! Increment time
+        ! Increment time
         call cube%fs%get_cfl(time%dt, cube%cfl)
         call xflw%fs%get_cfl(time%dt, xflw%cfl)
         time%cfl = max(cube%cfl, xflw%cfl)
         call time%adjust_dt()
         time%dt = min(time%dt, FORCE_TIMESCALE / G)
-        !time%dt = min(time%dt, sqrt(nu / max(cube%EPS, cube%EPSp)))
-        time%dt = min(time%dt, sqrt(nu / cube%EPS))
+        time%dt = min(time%dt, sqrt(ec_params(5) / max(cube%EPS, cube%EPSp)))
         !TODO re-enable when controller is re-integrated
         !time%dt = min(time%dt, ec_evt%tnext - time%t)
         call time%increment()
 
-        !! Cube step
-        ! Remember old velocity
-        cube%fs%Uold = cube%fs%U
-        cube%fs%Vold = cube%fs%V
-        cube%fs%Wold = cube%fs%W
-        ! advance particles
-        wt_cube_lpt%time_in = parallel_time()
-        !call cube%lp%collide(dt=time%dtmid)
-        call cube%lp%advance(dt=time%dtmid, U=cube%fs%U, V=cube%fs%V,         &
-          W=cube%fs%W, rho=cube%rho, visc=cube%fs%visc)
-        wt_cube_lpt%time = wt_cube_lpt%time + parallel_time() - wt_cube_lpt%time_in
-        ! re-flag particles within the acceptable range as copyable
-        reset_particle_flags: block
-          integer :: i
-          do i = 1, cube%lp%np_
-            if (part_reset_bdrys(1) .lt. cube%lp%p(i)%pos(1) .and.            &
-                part_reset_bdrys(2) .gt. cube%lp%p(i)%pos(1) .and.            &
-                cube%lp%p(i)%flag .eq. 2) then
-              cube%lp%p(i)%flag = 0
-            end if
-          end do
-        end block reset_particle_flags
-        ! Perform sub-iterations
-        do it = 1, time%itmax
-          ! Velocity step
-          wt_cube_vel%time_in = parallel_time()
-          cube%fs%U = 0.5_WP * (cube%fs%U + cube%fs%Uold)
-          cube%fs%V = 0.5_WP * (cube%fs%V + cube%fs%Vold)
-          cube%fs%W = 0.5_WP * (cube%fs%W + cube%fs%Wold)
-          call cube%fs%get_dmomdt(cube%resU, cube%resV, cube%resW)
-          cube%resU = -2.0_WP*(cube%fs%rho*cube%fs%U-cube%fs%rho*cube%fs%Uold)+time%dt*cube%resU
-          cube%resV = -2.0_WP*(cube%fs%rho*cube%fs%V-cube%fs%rho*cube%fs%Vold)+time%dt*cube%resV
-          cube%resW = -2.0_WP*(cube%fs%rho*cube%fs%W-cube%fs%rho*cube%fs%Wold)+time%dt*cube%resW
-          wt_cube_vel%time = wt_cube_vel%time + parallel_time() - wt_cube_vel%time_in
-          ! Linear forcing term (Bassenne et al. 2016)
-          wt_force%time_in = parallel_time()
-          ! note we have stats from the previous step; they haven't changed
-          !TODO DEBUG --- recompute statistics to see if this is the issue
-          call compute_cube_stats()
-          linear_forcing: block
-            real(WP) :: A
-            ! - Eq. (7) (forcing constant TKE)
-            A = (cube%EPSp - (G / FORCE_TIMESCALE) * (cube%TKE -              &
-              TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
-            !A = (cube%EPS - (G / FORCE_TIMESCALE) * (cube%TKE -               &
-            !  TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
-            ! update residuals
-            cube%resU = cube%resU + time%dt * A * (cube%fs%U - cube%meanU)
-            cube%resV = cube%resV + time%dt * A * (cube%fs%V - cube%meanV)
-            cube%resW = cube%resW + time%dt * A * (cube%fs%W - cube%meanW)
-          end block linear_forcing
-          wt_force%time = wt_force%time + parallel_time() - wt_force%time_in
-          ! Apply residuals
-          wt_cube_vel%time_in = parallel_time()
-          cube%fs%U = 2.0_WP * cube%fs%U - cube%fs%Uold + cube%resU / cube%fs%rho
-          cube%fs%V = 2.0_WP * cube%fs%V - cube%fs%Vold + cube%resV / cube%fs%rho
-          cube%fs%W = 2.0_WP * cube%fs%W - cube%fs%Wold + cube%resW / cube%fs%rho
-          wt_cube_vel%time = wt_cube_vel%time + parallel_time() - wt_cube_vel%time_in
-          ! Solve Poisson equation, correct velocity
-          wt_cube_pres%time_in = parallel_time()
-          call cube%fs%correct_mfr()
-          call cube%fs%get_div()
-          cube%fs%psolv%rhs = -cube%fs%cfg%vol * cube%fs%div * cube%fs%rho / time%dt
-          call cube%fs%psolv%solve()
-          call cube%fs%shift_p(cube%fs%psolv%sol)
-          call cube%fs%get_pgrad(cube%fs%psolv%sol, cube%resU, cube%resV, cube%resW)
-          cube%fs%P = cube%fs%P + cube%fs%psolv%sol
-          cube%fs%U = cube%fs%U - time%dt * cube%resU / cube%fs%rho
-          cube%fs%V = cube%fs%V - time%dt * cube%resV / cube%fs%rho
-          cube%fs%W = cube%fs%W - time%dt * cube%resW / cube%fs%rho
-          wt_cube_pres%time = wt_cube_pres%time + parallel_time() - wt_cube_pres%time_in
-        end do
+        ! Cube step
+        call cube_step()
 
-        !! Apply xflow bcs
-        ! update inflow bc using right side of cube 
-        ! here we use resU, resV, resW as pieces of memory that share a
-        ! compatible layout and pgrid with both geometries and contain
-        ! information at the inflow boundary (because it's a staggered mesh)
-        ! the overlap region needs to be as small as possible (for
-        ! performance) while being large enough to not cause any funky
-        ! edge cases or interpolation issues
-        call dom_cpl%push(cube%fs%U)
-        call dom_cpl%transfer()
-        call dom_cpl%pull(xflw%resU)
-        call dom_cpl%push(cube%fs%V)
-        call dom_cpl%transfer()
-        call dom_cpl%pull(xflw%resV)
-        call dom_cpl%push(cube%fs%W)
-        call dom_cpl%transfer()
-        call dom_cpl%pull(xflw%resW)
-        call dom_lptcpl%push()
-        call dom_lptcpl%transfer()
-        call dom_lptcpl%pull()
-        apply_inflow_vals: block
-          if (xflw%cfg%imin .eq. xflw%cfg%imin_) then
-            xflw%fs%U(xflw%cfg%imino_:xflw%cfg%imin_,:,:) = xflw%resU(xflw%cfg%imino_:xflw%cfg%imin_,:,:)
-            xflw%fs%V(xflw%cfg%imino_:xflw%cfg%imin_-1,:,:) = xflw%resV(xflw%cfg%imino_:xflw%cfg%imin_-1,:,:)
-            xflw%fs%W(xflw%cfg%imino_:xflw%cfg%imin_-1,:,:) = xflw%resW(xflw%cfg%imino_:xflw%cfg%imin_-1,:,:)
-          end if
-        end block apply_inflow_vals
-        call xflw%fs%apply_bcond(time%t, time%dt)
+        ! Xflw step
+        call xflw_step()
 
-        !! Xflw step
-        ! Remember old velocity
-        xflw%fs%Uold = xflw%fs%U
-        xflw%fs%Vold = xflw%fs%V
-        xflw%fs%Wold = xflw%fs%W
-        ! advance particles
-        wt_xflw_lpt%time_in = parallel_time()
-        !call xflw%lp%collide(dt=time%dtmid)
-        call xflw%lp%advance(dt=time%dtmid, U=xflw%fs%U, V=xflw%fs%V,    &
-          W=xflw%fs%W, rho=xflw%rho, visc=xflw%fs%visc)
-        wt_xflw_lpt%time = wt_xflw_lpt%time + parallel_time() - wt_xflw_lpt%time_in
-        ! Perform sub-iterations
-        do it = 1, time%itmax
-          ! Velocity step
-          wt_xflw_vel%time_in = parallel_time()
-          xflw%fs%U = 0.5_WP * (xflw%fs%U + xflw%fs%Uold)
-          xflw%fs%V = 0.5_WP * (xflw%fs%V + xflw%fs%Vold)
-          xflw%fs%W = 0.5_WP * (xflw%fs%W + xflw%fs%Wold)
-          call xflw%fs%get_dmomdt(xflw%resU, xflw%resV, xflw%resW)
-          xflw%resU = -2.0_WP*(xflw%fs%rho*xflw%fs%U-xflw%fs%rho*xflw%fs%Uold)+time%dt*xflw%resU
-          xflw%resV = -2.0_WP*(xflw%fs%rho*xflw%fs%V-xflw%fs%rho*xflw%fs%Vold)+time%dt*xflw%resV
-          xflw%resW = -2.0_WP*(xflw%fs%rho*xflw%fs%W-xflw%fs%rho*xflw%fs%Wold)+time%dt*xflw%resW
-          wt_xflw_vel%time = wt_xflw_vel%time + parallel_time() - wt_xflw_vel%time_in
-          ! Apply residuals
-          wt_xflw_vel%time_in = parallel_time()
-          xflw%fs%U = 2.0_WP * xflw%fs%U - xflw%fs%Uold + xflw%resU / xflw%fs%rho
-          xflw%fs%V = 2.0_WP * xflw%fs%V - xflw%fs%Vold + xflw%resV / xflw%fs%rho
-          xflw%fs%W = 2.0_WP * xflw%fs%W - xflw%fs%Wold + xflw%resW / xflw%fs%rho
-          call xflw%fs%apply_bcond(time%t, time%dt)
-          wt_xflw_vel%time = wt_xflw_vel%time + parallel_time() - wt_xflw_vel%time_in
-          ! Solve Poisson equation, correct velocity
-          wt_xflw_pres%time_in = parallel_time()
-          call xflw%fs%correct_mfr()
-          call xflw%fs%get_div()
-          xflw%fs%psolv%rhs = -xflw%fs%cfg%vol*xflw%fs%div*xflw%fs%rho/time%dt
-          call xflw%fs%psolv%solve()
-          call xflw%fs%shift_p(xflw%fs%psolv%sol)
-          call xflw%fs%get_pgrad(xflw%fs%psolv%sol, xflw%resU, xflw%resV, xflw%resW)
-          xflw%fs%P = xflw%fs%P + xflw%fs%psolv%sol
-          xflw%fs%U = xflw%fs%U - time%dt * xflw%resU / xflw%fs%rho
-          xflw%fs%V = xflw%fs%V - time%dt * xflw%resV / xflw%fs%rho
-          xflw%fs%W = xflw%fs%W - time%dt * xflw%resW / xflw%fs%rho
-          wt_xflw_pres%time = wt_xflw_pres%time + parallel_time() - wt_xflw_pres%time_in
-        end do
-
-        ! Recompute divergence
-        wt_cube_vel%time_in = parallel_time()
-        call cube%fs%get_div()
-        wt_cube_vel%time = wt_cube_vel%time + parallel_time() - wt_cube_vel%time_in
-        wt_xflw_vel%time_in = parallel_time()
-        call xflw%fs%get_div()
-        wt_xflw_vel%time = wt_xflw_vel%time + parallel_time() - wt_xflw_vel%time_in
+        ! Update bcs
+        call update_xflw_f_bc()
+        call update_xflw_p_bc()
 
         ! Output to ensight
         if (.not. ens_at_ints .and. ens_evt%occurs()) then
@@ -1100,16 +1232,18 @@ contains
 
         ! Statistics and output monitoring
         wt_stat%time_in = parallel_time()
-        call compute_cube_stats()
+        call compute_turb_stats()
+        call collect_selected_particles(cube)
         call write_gendom_monitors(cube)
         call write_hitcube_monitors(cube)
         wt_stat%time = wt_stat%time + parallel_time() - wt_stat%time_in
         wt_stat%time_in = parallel_time()
+        call collect_selected_particles(xflw)
         call write_gendom_monitors(xflw)
         wt_stat%time = wt_stat%time + parallel_time() - wt_stat%time_in
 
-        ! x dependent statistics
-
+        ! x-dependent statistics
+        call xflw%stats%compute_xdep_stats(time%n)
 
         ! Monitor timing
         wt_total%time = parallel_time() - wt_total%time_in
@@ -1146,11 +1280,13 @@ contains
         real(WP) :: interval
 
         ! collect statistics for this target value
+        call cube%lp%sync()
+        call xflw%lp%sync()
         call cube%stats%compute_stats(time%n)
-        call xflw%stats%compute_stats(time%n, time%t)  ! also writes slices
+        call cube%stats%write_sliceio(time%t)
+        !call xflw%stats%compute_stats(time%n, time%t)  ! also writes slices
         call ec%update_write(cube%Re_lambda, cube%Stk, cube%phiinf,           &
           cube%Wovk, cube%urms, cube%eta, time%t, time%n)
-        call cube%stats%write_sliceio(time%t)
 
         if (ens_at_ints) then
           call write_ens(cube)

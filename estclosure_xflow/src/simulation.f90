@@ -42,6 +42,9 @@ module simulation
 
   real(WP), parameter :: FILTER_MESH_RATIO = 3.5_WP
   real(WP), parameter :: GRID_OVERLAP = 0.02_WP
+  ! if we rescale we get a mean velocity that is constant over time, but we
+  ! induce slip at the inflow from this rescaling
+  logical, parameter :: RESCALE_XFLW_BDRY = .true.
 
 
   !> The easiest way to get data from the cube is probably to just evolve the
@@ -1169,10 +1172,12 @@ contains
       li = xflw%cfg%imino_; hi = xflw%cfg%imin_;
       lj = xflw%cfg%jmin_; hj = xflw%cfg%jmax_;
       lk = xflw%cfg%kmin_; hk = xflw%cfg%kmax_;
-      l_ubar = sum(xflw%resU(hi,lj:hj,lk:hk))
-      call mpi_allreduce(l_ubar, g_ubar, 1, MPI_REAL_WP, MPI_SUM, xflw%cfg%yzcomm)
-      g_ubar = g_ubar / (xflw%cfg%ny * xflw%cfg%nz)
-      xflw%resU(li:hi,:,:) = xflw%resU(li:hi,:,:) + (xflowvel - g_ubar)
+      if (RESCALE_XFLW_BDRY) then
+        l_ubar = sum(xflw%resU(hi,lj:hj,lk:hk))
+        call mpi_allreduce(l_ubar, g_ubar, 1, MPI_REAL_WP, MPI_SUM, xflw%cfg%yzcomm)
+        g_ubar = g_ubar / (xflw%cfg%ny * xflw%cfg%nz)
+        xflw%resU(li:hi,:,:) = xflw%resU(li:hi,:,:) + (xflowvel - g_ubar)
+      end if
       xflw%fs%U(li:hi,:,:) = xflw%resU(li:hi,:,:)
       xflw%fs%V(li:hi-1,:,:) = xflw%resV(li:hi-1,:,:)
       xflw%fs%W(li:hi-1,:,:) = xflw%resW(li:hi-1,:,:)

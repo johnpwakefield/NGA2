@@ -42,10 +42,10 @@ module xflwstats_class
   ! data only allocated / updated on root
   type :: xdepstats
     integer :: step
-    integer, dimension(22) :: units
+    integer, dimension(24) :: units
     ! these arrays are only imin to imax and don't include overlap
     integer, dimension(:), allocatable :: num
-    real(WP), dimension(:), allocatable :: nden, ndensq, p
+    real(WP), dimension(:), allocatable :: nden, ndensq, p, pke, fke
     real(WP), dimension(:,:), allocatable :: vel, velsq, slp, slpsq, drg, fvel  ! 3 by nx
     integer, dimension(:,:,:), allocatable :: tmpmesh
   contains
@@ -166,7 +166,8 @@ contains
       this%vel(3,g%imin:g%imax), this%velsq(3,g%imin:g%imax),                 &
       this%slp(3,g%imin:g%imax), this%slpsq(3,g%imin:g%imax),                 &
       this%drg(3,g%imin:g%imax), this%p(g%imin:g%imax),                       &
-      this%fvel(3,g%imin:g%imax))
+      this%fvel(3,g%imin:g%imax),                                             &
+      this%pke(g%imin:g%imax), this%fke(g%imin:g%imax))
     allocate(this%tmpmesh(g%imin:g%imax,g%jmin:g%jmax,g%kmin:g%kmax))
 
     ! just use raw files for all the x dependent statistics
@@ -216,8 +217,12 @@ contains
         file='xflw_stat/fvely')
       open(newunit=this%units(22), action='WRITE', form='FORMATTED',          &
         file='xflw_stat/fvelz')
+      open(newunit=this%units(23), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/pke')
+      open(newunit=this%units(24), action='WRITE', form='FORMATTED',          &
+        file='xflw_stat/fke')
       !TODO split this so that x and xm are used appropriately
-      do i = 1, 22
+      do i = 1, 24
         write(this%units(i),'(A8,*(E20.6))') ' x ', g%x(g%imin:g%imax)
       end do
     end if
@@ -256,6 +261,8 @@ contains
       write(this%units(20),'(I8,*(E20.8E3))') n, this%fvel(1,  g%imin:g%imax)
       write(this%units(21),'(I8,*(E20.8E3))') n, this%fvel(2,  g%imin:g%imax)
       write(this%units(22),'(I8,*(E20.8E3))') n, this%fvel(3,  g%imin:g%imax)
+      write(this%units(23),'(I8,*(E20.8E3))') n, this%pke(     g%imin:g%imax)
+      write(this%units(24),'(I8,*(E20.8E3))') n, this%fke(     g%imin:g%imax)
 
     end if
 
@@ -268,12 +275,12 @@ contains
 
     ! monitor falls out of scope and has its own destructor
 
-    do i = 1, 22
+    do i = 1, 24
       close(unit=this%units(i))
     end do
 
     deallocate(this%num, this%nden, this%ndensq, this%vel, this%velsq,        &
-      this%slp, this%slpsq, this%drg, this%p, this%fvel)
+      this%slp, this%slpsq, this%drg, this%p, this%fvel, this%pke, this%fke)
 
   end subroutine xdepstats_destroy
 
@@ -834,11 +841,11 @@ contains
     class(xflwstats), intent(inout) :: this
     integer, intent(in) :: step
     integer :: n, i, j, k
-    real(WP) :: opt_dt, slicevol
+    real(WP) :: opt_dt, slicevol, mp
     integer, dimension(3) :: indmin, indmax
     real(WP), dimension(3) :: acc, fvel, velmean
     integer, dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: num
-    real(WP), dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: press
+    real(WP), dimension(this%ps%cfg%imin:this%ps%cfg%imax) :: press, pke, fke
     real(WP), dimension(3,this%ps%cfg%imin:this%ps%cfg%imax) :: vel, velsq,   &
       slp, slpsq, drg
 
@@ -858,7 +865,7 @@ contains
     num(:) = 0; this%mstats%tmpmesh(:,:,:) = 0.0_WP;
     vel(:,:) = 0.0_WP; velsq(:,:) = 0.0_WP;
     slp(:,:) = 0.0_WP; slpsq(:,:) = 0.0_WP;
-    drg(:,:) = 0.0_WP;
+    drg(:,:) = 0.0_WP; pke(:) = 0.0_WP;
 
     ! compute microscopic statistics
     do n = 1, this%ps%np_
@@ -881,6 +888,8 @@ contains
         visc=this%visc, stress_x=this%zeros, stress_y=this%zeros,             &
         stress_z=this%zeros, p=this%ps%p(n), acc=acc, opt_dt=opt_dt)
       drg(:,i) = drg(:,i) + acc(:)
+      mp = pi * this%ps%p(n)%d**3 / 6.0_WP
+      pke(i) = pke(i) + 0.5_WP * mp * sum((this%ps%p(n)%vel - velmean)**2)
     end do
 
     ! collect statistics to root
@@ -895,6 +904,8 @@ contains
     call mpi_reduce(slpsq, this%mstats%slpsq, 3*this%ps%cfg%nx, MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
     call mpi_reduce(drg,   this%mstats%drg,   3*this%ps%cfg%nx, MPI_REAL_WP,  &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(pke,   this%mstats%pke,   this%ps%cfg%nx,   MPI_REAL_WP,  &
       MPI_SUM, 0, this%ps%cfg%comm)
 
     ! divide as appropriate
@@ -921,7 +932,7 @@ contains
     end if
 
     ! compute continuum stats along x direction
-    vel(:,:) = 0.0_WP; press(:) = 0.0_WP;
+    vel(:,:) = 0.0_WP; press(:) = 0.0_WP; fke(:) = 0.0_WP;
     do k = this%ps%cfg%kmin_, this%ps%cfg%kmax_
       do j = this%ps%cfg%jmin_, this%ps%cfg%jmax_
         do i = this%ps%cfg%imin_, this%ps%cfg%imax_
@@ -929,12 +940,18 @@ contains
           vel(2,i) = vel(2,i) + this%V(i,j,k)
           vel(3,i) = vel(3,i) + this%W(i,j,k)
           press(i) = press(i) + this%p(i,j,k)
+          mp = this%rhof(i,j,k) * this%ps%cfg%dx(i) * this%ps%cfg%dy(j)       &
+            * this%ps%cfg%dz(k)
+          fke(i) = fke(i) + 0.5_WP * mp * sum(((/ this%U(i,j,k),              &
+            this%V(i,j,k), this%W(i,j,k) /) - velmean)**2)
         end do
       end do
     end do
     call mpi_reduce(vel,   this%mstats%fvel, 3*this%ps%cfg%nx, MPI_REAL_WP,   &
       MPI_SUM, 0, this%ps%cfg%comm)
-    call mpi_reduce(press, this%mstats%p,      this%ps%cfg%nx, MPI_REAL_WP,   &
+    call mpi_reduce(press, this%mstats%p,    this%ps%cfg%nx,   MPI_REAL_WP,   &
+      MPI_SUM, 0, this%ps%cfg%comm)
+    call mpi_reduce(fke, this%mstats%fke,    this%ps%cfg%nx,   MPI_REAL_WP,   &
       MPI_SUM, 0, this%ps%cfg%comm)
     if (this%ps%cfg%rank .eq. 0) then
       this%mstats%fvel = this%mstats%fvel / (this%ps%cfg%ny * this%ps%cfg%nz)

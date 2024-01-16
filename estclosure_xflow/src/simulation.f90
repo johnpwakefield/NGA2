@@ -157,7 +157,7 @@ contains
 
   subroutine compute_turb_stats()
     use mathtools, only: pi
-    use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+    use mpi_f08,   only: mpi_allreduce, MPI_SUM
     use parallel,  only: MPI_REAL_WP
     real(WP) :: myTKE, myEPS, myEPSp
     integer :: i, j, k, ierr
@@ -189,9 +189,9 @@ contains
         end do
       end do
     end do
-    call MPI_ALLREDUCE(myTKE,cube%TKE,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
-    call MPI_ALLREDUCE(myEPS,cube%EPS,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
-    call MPI_ALLREDUCE(myEPSp,cube%EPSp,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
+    call mpi_allreduce(myTKE,cube%TKE,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
+    call mpi_allreduce(myEPS,cube%EPS,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
+    call mpi_allreduce(myEPSp,cube%EPSp,1,MPI_REAL_WP,MPI_SUM,cube%fs%cfg%comm,ierr)
     cube%TKE = max(cube%TKE / cube%fs%cfg%vol_total, epsilon(cube%TKE))
     cube%EPS = max(cube%EPS / cube%fs%cfg%vol_total, epsilon(cube%EPS))
     cube%EPSp = cube%EPSp / (cube%fs%cfg%vol_total * cube%fs%rho)
@@ -1010,10 +1010,10 @@ contains
       linear_forcing: block
         real(WP) :: A
         ! - Eq. (7) (forcing constant TKE)
-        A = (cube%EPSp - (G / FORCE_TIMESCALE) * (cube%TKE -              &
-          TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
-        !A = (cube%EPS - (G / FORCE_TIMESCALE) * (cube%TKE -               &
+        !A = (cube%EPSp - (G / FORCE_TIMESCALE) * (cube%TKE -                  &
         !  TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
+        A = (cube%EPS - (G / FORCE_TIMESCALE) * (cube%TKE -                   &
+          TKE_target)) / (2.0_WP * cube%TKE) * cube%fs%rho
         ! update residuals
         cube%resU = cube%resU + time%dt * A * (cube%fs%U - cube%meanU)
         cube%resV = cube%resV + time%dt * A * (cube%fs%V - cube%meanV)

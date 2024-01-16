@@ -373,9 +373,12 @@ contains
     real(WP) :: PB_loc, PC2_loc
     real(WP), dimension(3) :: UB_loc, SB_loc, PCUB_loc, UBPCG_loc
     real(WP), dimension(3,3) :: UC2_loc
-    integer :: i, j, k, n, m, N3, ierr
+    integer :: i, j, k, li, hi, lj, hj, lk, hk, n, m, N3, ierr
 
     N3 = fft%pg%nx * fft%pg%ny * fft%pg%nz
+    li = fft%pg%imin_; hi = fft%pg%imax_;
+    lj = fft%pg%jmin_; hj = fft%pg%jmax_;
+    lk = fft%pg%kmin_; hk = fft%pg%kmax_;
 
     ! copy over step
     stats%step = step
@@ -399,16 +402,14 @@ contains
       uf(:,:,:,n) = realpart(work_c)
     end do
 
-    !TODO need bounds fixes in here to enable ghost cells if required (or use cfg_integrate)
-
     ! compute PB
-    PB_loc = sum(phi)
+    PB_loc = sum(phi(li:hi,lj:hj,lk:hk))
     call mpi_allreduce(PB_loc, stats%PB, 1, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
     stats%PB = stats%PB / N3
 
     ! compute UB
-    !TODO this will be exactly zero from above; remove this and make sure the correct value is output to monitor files elsewhere
-    do n = 1, 3; UB_loc(n) = sum(up(:,:,:,n)); end do
+    ! this should be exactly zero
+    do n = 1, 3; UB_loc(n) = sum(up(li:hi,lj:hj,lk:hk,n)); end do
     call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM, fft%pg%comm, ierr)
     stats%UB = stats%UB / N3
 

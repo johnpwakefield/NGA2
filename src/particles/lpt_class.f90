@@ -874,7 +874,7 @@ contains
     compute_drag: block
       real(WP) :: Re,tau,corr,b1,b2
       ! Particle Reynolds number
-      Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+      Re=frho*norm2(p%vel-fvel)*(p%d/fvisc)+epsilon(1.0_WP)
       ! Drag correction
       select case(trim(this%drag_model))
       case('None','none')

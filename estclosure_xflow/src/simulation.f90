@@ -1289,7 +1289,7 @@ contains
         call xflw%lp%sync()
         call cube%stats%compute_stats(time%n)
         call cube%stats%write_sliceio(time%t)
-        !call xflw%stats%compute_stats(time%n, time%t)  ! also writes slices
+        call xflw%stats%compute_stats(time%n, time%t)  ! also writes slices
         call ec%update_write(cube%Re_lambda, cube%Stk, cube%phiinf,           &
           cube%Wovk, cube%urms, cube%eta, time%t, time%n)
 

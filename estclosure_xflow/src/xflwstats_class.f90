@@ -535,7 +535,7 @@ contains
 
     if (.not. this%in_grp) return
 
-    ! project particles 
+    ! project particles
     this%phi(:,:,:) = 0.0_WP; this%phi_x(:,:,:) = 0.0_WP;
     this%up(:,:,:,:) = 0.0_WP; this%uf(:,:,:,:) = 0.0_WP;
     do n = 1, size(ps)
@@ -982,9 +982,12 @@ contains
       !call this%planes(m)%obs_lpt%recycle()  using array mode
       call this%planes(m)%lptcpl%push()
       call this%planes(m)%lptcpl%transfer()
-      if (this%planes(m)%in_grp) call this%planes(m)%lptcpl%pull()
 
+      ! move to next if not in group
       if (.not. this%planes(m)%in_grp) cycle
+
+      ! pull from obsplane coupler
+      call this%planes(m)%lptcpl%pull()
 
       do n = 1, this%num_filters
 
@@ -1031,7 +1034,9 @@ contains
       end do
 
       ! write npy output for slice
-      call this%planes(m)%io_f%write_data(t)
+      if (this%planes(m)%in_grp) then
+        call this%planes(m)%io_f%write_data(t)
+      end if
 
     end do
 

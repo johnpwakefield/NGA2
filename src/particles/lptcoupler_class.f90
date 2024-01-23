@@ -123,7 +123,7 @@ contains
 
     ! Create intracommunicator for the new group
     call mpi_comm_create_group(comm, self%ugrp, 0, self%comm, ierr)
-    call mpi_comm_group(self%comm, self%ugrp, ierr)
+    !call mpi_comm_group(self%comm, self%ugrp, ierr)
 
     ! get ranks and number of processors in this new group
     call mpi_group_size(self%ugrp, self%unp, ierr)
@@ -261,7 +261,7 @@ contains
       this%comm, ierr)
     call mpi_allreduce(tcorner, this%olapmax, 3, MPI_REAL_WP, MPI_MIN,        &
       this%comm, ierr)
-    if (any(this%olapmin .gt. this%olapmax))                                  &
+    if (any(this%olapmin .ge. this%olapmax))                                  &
       call die('[lptcoupler] no overlap between source and destination grids')
 
     ! set destination grid on all processes
@@ -407,6 +407,23 @@ contains
     if (this%drank .eq. MPI_UNDEFINED) return
 
     recv_tot = sum(this%recvcounts)
+
+    ! TODO debug
+    do i = 1, recv_tot
+      this%recvbuf(i)%ind = this%dst_pg%get_ijk_global(this%recvbuf(i)%pos)
+      if (this%dst_pg%rank .ne. this%dst_pg%get_rank(this%recvbuf(i)%ind)) then
+        write(*,*) 'ERROR: particle sent to wrong process'
+        if (this%in_overlap(this%recvbuf(i)%pos)) then
+          write(*,*) '       ', 'is in overlap region'
+        else
+          write(*,*) '       ', 'is not in overlap region'
+        end if
+        write(*,*) '       ', this%recvbuf(i)%ind, this%recvbuf(i)%pos
+        write(*,*) '       ', this%dst_pg%get_ijk_global(this%recvbuf(i)%pos)
+        write(*,*) '       ', this%dst_pg%get_rank(this%recvbuf(i)%ind)
+        stop
+      end if
+    end do
 
     if (this%array_mode) then
 

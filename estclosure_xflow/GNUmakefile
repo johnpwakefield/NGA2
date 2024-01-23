@@ -2,16 +2,16 @@
 NGA_HOME ?= ..
 
 # Compilation parameters
-COMP      = gnu
-PRECISION = DOUBLE
-USE_MPI   = TRUE
-USE_FFTW  = TRUE
-USE_HYPRE = TRUE
-USE_LAPACK= TRUE
-DO_ESTIMCLOSURES=TRUE
-PROFILE   = FALSE
-DEBUG     = FALSE
-EXEBASE   = nga
+COMP       =  gnu
+PRECISION  =  DOUBLE
+USE_MPI    =  TRUE
+USE_FFTW   =  TRUE
+USE_HYPRE  =  TRUE
+USE_LAPACK =  TRUE
+DO_ESTIMCLOSURES = TRUE
+PROFILE = FALSE
+DEBUG   = TRUE
+EXEBASE = nga
 
 # Directories that contain user-defined code
 Udirs   := src

@@ -1,0 +1,76 @@
+# Parallelization
+Partition :	2 2 1
+
+# Mesh definition
+Cube Lx   : 1.0
+Cube Nx   : 40
+Xflow Ll  : 2.1
+Xflow Nl  : 80
+Xflow Nw  : 40
+Overlap   : 0.02
+
+# Particle Parameters
+Number of particles :   120
+
+# Steady-state (forcing) parameters
+Forcing constant : 60.0
+
+# Xflow parameters
+Xflow rms mult   : 4.0
+Xflow relax time : 0.1
+
+# Particle reset boundaries
+Particle reset boundaries : 0.2 0.24
+
+# Parameter sweep
+EC min Relambda : 25.0
+EC max Relambda : 25.0
+EC num Relambda : 1
+EC log Relambda : false
+EC min Stk      : 0.5
+EC max Stk      : 2.0
+EC num Stk      : 4
+EC log Stk      : false
+EC min Wovk     : 0.0
+EC max Wovk     : 2.0
+EC num Wovk     : 3
+EC log Wovk     : false
+EC min vf       : 1e-6
+EC max vf       : 1e-4
+EC num vf       : 3
+EC log vf       : true
+EC num sweeps   : 2
+#TODO this is temporary while doing proof of concept stuff
+EC data per statpoint : 400
+
+# data collection parameters
+EC integral timescales :    0.02
+EC new sim multiplier :     8.00
+EC new params multiplier :  2.00
+
+# EC Parameters
+Cube FFT mesh   : 128 128 128
+XFlow FFT mesh  : 128 128
+Filter list     : filterlist.txt
+
+# HS Parameters
+HS write slice                : true
+HS slice thickness proportion : 0.1
+HS obs plane count            : 2
+HS obs plane locations        : 0.8 1.8
+HS obs plane lpt widths       : 0.2 0.2
+
+# Time integration
+Max timestep size : 4e-2
+Max cfl number    : 0.9
+
+# Implicit solvers
+Xflow velocity iteration : 8
+Xflow velocity tolerance : 1e-12
+Cube velocity iteration : 8
+Cube velocity tolerance : 1e-12
+
+# Ensight output
+Ensight at intervals  : false
+Ensight output period : 2e-1
+

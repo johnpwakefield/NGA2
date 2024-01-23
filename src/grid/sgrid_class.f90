@@ -334,8 +334,8 @@ contains
       dx = (/ this%dx(this%imin), this%dy(this%jmin), this%dz(this%kmin) /)
       y = (pos - y) / dx
       indguess = ceiling(y)
-      indguess = max((/ this%imino, this%jmino, this%kmino /)    , indguess)
-      indguess = min((/ this%imaxo, this%jmaxo, this%kmaxo /) + 1, indguess)
+      indguess = max((/ this%imino, this%jmino, this%kmino /), indguess)
+      indguess = min((/ this%imaxo, this%jmaxo, this%kmaxo /), indguess)
       ! Call get_ijk_global
       ind = get_ijk_global_withguess(this,pos,indguess)
    end function get_ijk_global_noguess

@@ -24,6 +24,9 @@ module lptcoupler_class
     ! This is the name of the coupler
     character(len=str_medium) :: name='UNNAMED_LPTCPL'!< Coupler name (default=UNNAMED_CPL)
 
+    ! Random integer to identify this coupler
+    integer :: chk
+
     ! source and destination objects
     ! we allow two operation modes, one in which the destination is another lpt and one in which
     ! the destination is an array; the mode is determine automatically from which set_dst is
@@ -99,13 +102,16 @@ contains
   function construct_from_two_groups(src_grp, dst_grp, name) result(self)
     use messager, only: die
     use parallel, only: comm
-    use mpi_f08, only: mpi_group_union, mpi_comm_create_group, mpi_comm_group,&
-      mpi_group_rank, mpi_group_size, mpi_comm_rank, mpi_group_translate_ranks
+    use mpi_f08, only: mpi_group_union, mpi_comm_create_group,                &
+      mpi_comm_group, mpi_group_rank, mpi_group_size, mpi_comm_rank,          &
+      mpi_group_translate_ranks, mpi_bcast, MPI_INTEGER
     implicit none
+    intrinsic random_number
     type(lptcoupler) :: self
     type(MPI_GROUP), intent(in) :: src_grp, dst_grp
     character(len=*), intent(in) :: name
     integer, dimension(2) :: ranks
+    double precision :: rf
     integer :: ierr
 
     ! Set name for the coupler
@@ -138,6 +144,13 @@ contains
     ! Default to no src or dst
     self%have_src = .false.; self%have_dst = .false.;
     self%initialized = .false.
+
+    ! Set check
+    if (self%urank .eq. 0) then
+      call random_number(rf)
+      self%chk = floor(2**15 * rf)
+    end if
+    call mpi_bcast(self%chk, 1, MPI_INTEGER, 0, self%comm)
 
   end function construct_from_two_groups
 
@@ -418,10 +431,9 @@ contains
         else
           write(*,*) '       ', 'is not in overlap region'
         end if
-        write(*,*) '       ', this%recvbuf(i)%ind, this%recvbuf(i)%pos
-        write(*,*) '       ', this%dst_pg%get_ijk_global(this%recvbuf(i)%pos)
-        write(*,*) '       ', this%dst_pg%get_rank(this%recvbuf(i)%ind)
-        stop
+        write(*,*) '       ', this%recvbuf(i)%ind, this%dst_pg%get_ijk_global(this%recvbuf(i)%pos)
+        write(*,*) '       ', this%recvbuf(i)%pos, this%olapmin, this%olapmax
+        write(*,*) '       ', this%dst_pg%rank, this%dst_pg%get_rank(this%recvbuf(i)%ind)
       end if
     end do
 
@@ -453,14 +465,22 @@ contains
 
   end subroutine pull
 
-  !> Routine that transfers the data from src to dst - both src_group and dst_group processors need to call
+  !> Routine that transfers the data from src to dst - both src_group and
+  !> dst_group processors need to call
   subroutine transfer(this)
-    use mpi_f08,   only: MPI_INTEGER, mpi_alltoall, mpi_alltoallv
+    use mpi_f08,   only: MPI_INTEGER, mpi_alltoall, mpi_alltoallv, mpi_bcast
     use lpt_class, only: MPI_PART
+    use messager, only: die
     implicit none
     class(lptcoupler), intent(inout) :: this
     integer, dimension(1:this%unp) :: senddisps, recvdisps, uranks, dranks
-    integer :: i, ierr
+    integer :: i, chk, ierr
+
+    !TODO DEBUG send check
+    chk = -1
+    if (this%urank .eq. 0) chk = this%chk
+    call mpi_bcast(chk, 1, MPI_INTEGER, 0, this%comm)
+    if (chk .ne. this%chk) call die("[lptcoupler] check does not match")
 
     ! send sizes
     call mpi_alltoall(this%sendcounts, 1, MPI_INTEGER, this%recvcounts, 1,    &

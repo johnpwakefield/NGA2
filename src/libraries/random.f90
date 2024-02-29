@@ -70,14 +70,14 @@ contains
    end subroutine random_initialize
    
    
-   !> Sampling of a WP real from a uniform distribution in [lo,hi]
+   !> Sampling of a WP real from a uniform distribution in [lo,hi)
    function random_uniform(lo,hi) result(res)
       use precision, only: WP
       implicit none
       !> Lower and upper bounds of the distribution
       real(kind=WP), intent(in) :: lo,hi
       real(kind=WP) :: res
-      ! Generate random_uniform in [0,1]
+      ! Generate random_uniform in [0,1)
       call random_number(res)
       ! Modify to give correct bounds
       res=lo+(hi-lo)*res

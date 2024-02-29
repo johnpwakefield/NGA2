@@ -1,7 +1,9 @@
 !> Adds particle coupling to an existing coupler
 module lptcoupler_class
   use precision,      only: WP
-  use mpi_f08,        only: MPI_COMM, MPI_GROUP, MPI_UNDEFINED
+  use mpi_f08,        only: MPI_COMM, MPI_GROUP, MPI_UNDEFINED,               &
+    mpi_group_translate_ranks, MPI_INTEGER, MPI_LOGICAL
+  use parallel,       only: MPI_REAL_WP
   use string,         only: str_medium
   use sgrid_class,    only: sgrid
   use pgrid_class,    only: pgrid
@@ -104,7 +106,7 @@ contains
     use parallel, only: comm
     use mpi_f08, only: mpi_group_union, mpi_comm_create_group,                &
       mpi_comm_group, mpi_group_rank, mpi_group_size, mpi_comm_rank,          &
-      mpi_group_translate_ranks, mpi_bcast, MPI_INTEGER
+      mpi_bcast
     implicit none
     intrinsic random_number
     type(lptcoupler) :: self
@@ -233,9 +235,7 @@ contains
   !> Allocate buffers
   subroutine initialize(this)
     use messager, only: warn, die
-    use mpi_f08,  only: mpi_allreduce, MPI_MIN, MPI_MAX,                      &
-      MPI_INTEGER, MPI_LOGICAL, mpi_bcast, mpi_group_translate_ranks
-    use parallel, only: MPI_REAL_WP
+    use mpi_f08,  only: mpi_allreduce, MPI_MIN, MPI_MAX, mpi_bcast
     implicit none
     class(lptcoupler), intent(inout) :: this
     real(WP), dimension(3) :: bcorner, tcorner
@@ -370,9 +370,10 @@ contains
     class(lptcoupler), intent(inout) :: this
     logical, intent(in), optional :: only_count
     logical :: only_count_actual
-    integer :: i, j, urank, drank, os, ns, oe, ne, oldbufsize
+    integer :: i, j, k, urank, drank, newbufsize
+    integer, dimension(this%dnp) :: drank_to_urank
     integer, dimension(3) :: dstind
-    type(part), dimension(:), pointer :: oldbuf
+    type(part), dimension(:), pointer :: newbuf
 
     only_count_actual = .false.
     if (present(only_count)) only_count_actual = only_count
@@ -380,6 +381,9 @@ contains
     this%sendcounts(:) = 0
 
     if (this%srank .eq. MPI_UNDEFINED) return
+
+    call mpi_group_translate_ranks(this%dgrp, this%dnp,                       &
+      (/ (i, i = 1, this%dnp) /) - 1, this%ugrp, drank_to_urank)
 
     do i = 1, this%src%np_
       if (.not. this%in_overlap(this%src%p(i)%pos)) cycle
@@ -389,27 +393,57 @@ contains
       dstind = this%dsg%get_ijk_global(this%src%p(i)%pos)
       urank = this%urankmap(dstind(1), dstind(2), dstind(3))
       drank = this%drankmap(dstind(1), dstind(2), dstind(3))
-      this%sendcounts(urank+1) = this%sendcounts(urank+1) + 1
       if (.not. only_count_actual) then
-        if (this%sendcounts(urank+1) .gt. this%sendbufsize) then
-          oldbufsize = this%sendbufsize; oldbuf => this%sendbuf;
-          this%sendbufsize = ceiling(maxval(this%sendcounts) * MEM_ADJ_UP)
-          nullify(this%sendbuf); allocate(this%sendbuf(this%dnp * this%sendbufsize));
-          do j = 1, this%dnp
-            os = 1 + oldbufsize * (j - 1);       oe = os + oldbufsize - 1;
-            ns = 1 + this%sendbufsize * (j - 1); ne = ns + oldbufsize - 1;
-            this%sendbuf(ns:ne) = oldbuf(os:oe)
+        if (this%sendcounts(urank+1) + 1 .gt. this%sendbufsize) then
+          newbufsize = ceiling((maxval(this%sendcounts) + 1) * MEM_ADJ_UP)
+          allocate(newbuf(this%dnp * newbufsize))
+          do j = 0, this%dnp - 1
+            do k = 1, this%sendcounts(drank_to_urank(j+1)+1)
+              newbuf(newbufsize * j + k) = this%sendbuf(this%sendbufsize * j + k)
+            end do
           end do
-          deallocate(oldbuf)
+          deallocate(this%sendbuf); this%sendbuf => newbuf;
+          this%sendbufsize = newbufsize;
+          call checksendbuffer(this, 'resize')
         end if
-        j = this%sendbufsize * drank + this%sendcounts(urank+1)
+        j = this%sendbufsize * drank + this%sendcounts(urank+1) + 1
         this%sendbuf(j) = this%src%p(i)
         this%sendbuf(j)%ind = dstind
         this%src%p(i)%flag = this%srcflag
       end if
+      this%sendcounts(urank+1) = this%sendcounts(urank+1) + 1
     end do
 
+    if (.not. only_count_actual) call checksendbuffer(this, 'endpush')
+
   end subroutine push
+
+  !> Check send buffer contains particles meant for communication
+  subroutine checksendbuffer(this, event)
+    use messager, only: die
+    implicit none
+    class(lptcoupler), intent(in) :: this
+    character(len=*), intent(in) :: event
+    integer :: j, k
+    real(WP), dimension(3) :: x
+    integer, dimension(3) :: ind
+    integer, dimension(this%dnp) :: drank_to_urank
+
+    call mpi_group_translate_ranks(this%dgrp, this%dnp,                       &
+      (/ (j, j = 1, this%dnp) /) - 1, this%ugrp, drank_to_urank)
+
+    do j = 0, this%dnp - 1
+      do k = 1, this%sendcounts(drank_to_urank(j+1)+1)
+        x(:) = this%sendbuf(this%sendbufsize * j + k)%pos
+        if (.not. this%in_overlap(x))                                         &
+          call die("Particle in send buffer not in overlap. (" // event // ")")
+        ind = this%dsg%get_ijk_global(x)
+        if (this%drankmap(ind(1), ind(2), ind(3)) .ne. j)                     &
+          call die("Particle has incorrect drank. (" // event // ")")
+      end do
+    end do
+
+  end subroutine checksendbuffer
 
   !> Routine that replaces particles in the overlap region with those from the coupler
   subroutine pull(this)
@@ -468,13 +502,16 @@ contains
   !> Routine that transfers the data from src to dst - both src_group and
   !> dst_group processors need to call
   subroutine transfer(this)
-    use mpi_f08,   only: MPI_INTEGER, mpi_alltoall, mpi_alltoallv, mpi_bcast
+    use mpi_f08,   only: mpi_alltoall, mpi_alltoallv, mpi_bcast
     use lpt_class, only: MPI_PART
     use messager, only: die
     implicit none
     class(lptcoupler), intent(inout) :: this
-    integer, dimension(1:this%unp) :: senddisps, recvdisps, uranks, dranks
+    integer, dimension(1:this%unp) :: senddisps, recvdisps, dranks
     integer :: i, chk, ierr
+
+    !TODO DEBUG first check send buffer
+    call checksendbuffer(this, 'pretransfer')
 
     !TODO DEBUG send check
     chk = -1
@@ -486,6 +523,10 @@ contains
     call mpi_alltoall(this%sendcounts, 1, MPI_INTEGER, this%recvcounts, 1,    &
       MPI_INTEGER, this%comm, ierr)
 
+    !TODO DEBUG check processes that shouldn't be getting particles aren't and vice versa
+    if (this%drank .eq. MPI_UNDEFINED .and. this%recvcounts(this%urank+1) .ne. 0) call die("processor not in dst group being sent particles")
+    if (this%srank .eq. MPI_UNDEFINED .and. this%sendcounts(this%urank+1) .ne. 0) call die("processor not in src group sending particles")
+
     ! resize recieve buffer if needed
     if (sum(this%recvcounts) .gt. this%recvbufsize) then
       this%recvbufsize = ceiling(MEM_ADJ_UP * sum(this%recvcounts))
@@ -496,13 +537,12 @@ contains
     if (this%srank .eq. MPI_UNDEFINED) then
       senddisps(:) = 0
     else
-      uranks(:) = (/ (i - 1, i = 1, this%unp) /)
-      call mpi_group_translate_ranks(this%ugrp, this%unp, uranks, this%dgrp,  &
-        dranks, ierr)
+      call mpi_group_translate_ranks(this%ugrp, this%unp,                     &
+        (/ (i, i = 1, this%unp) /) - 1, this%dgrp, dranks, ierr)
       senddisps(1) = 0
       do i = 2, this%unp
         senddisps(i) = senddisps(i-1)
-        if (dranks(i) .ne. MPI_UNDEFINED)                                     &
+        if (dranks(i-1) .ne. MPI_UNDEFINED)                                   &
           senddisps(i) = senddisps(i) + this%sendbufsize
       end do
     end if

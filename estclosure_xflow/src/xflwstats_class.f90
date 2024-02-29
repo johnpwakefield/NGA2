@@ -969,6 +969,7 @@ contains
   !TODO this has not been edited since being copied from the old version; none of the micro stats/setup stuff is
   !correct, the iteration through filters has changed, couplers need to be added for particles, etc
   subroutine xflwstats_opln_stats(this, step, t)
+    use mpi_f08, only: MPI_UNDEFINED
     implicit none
     class(xflwstats), intent(inout) :: this
     integer, intent(in) :: step
@@ -983,8 +984,9 @@ contains
       call this%planes(m)%lptcpl%push()
       call this%planes(m)%lptcpl%transfer()
 
-      ! move to next if not in group
+      ! move to next if not in destination group
       if (.not. this%planes(m)%in_grp) cycle
+      if (this%planes(m)%lptcpl%drank .eq. MPI_UNDEFINED) cycle
 
       ! pull from obsplane coupler
       call this%planes(m)%lptcpl%pull()

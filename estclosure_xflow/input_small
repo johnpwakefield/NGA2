@@ -40,8 +40,7 @@ EC max vf       : 1e-4
 EC num vf       : 3
 EC log vf       : true
 EC num sweeps   : 2
-#TODO this is temporary while doing proof of concept stuff
-EC data per statpoint : 400
+EC data per statpoint : 8
 
 # data collection parameters
 EC integral timescales :    1.0
@@ -56,21 +55,21 @@ Filter list     : filterlist.txt
 # HS Parameters
 HS write slice                : true
 HS slice thickness proportion : 0.1
-HS obs plane count            : 3
-HS obs plane locations        : 2.5 3.0 3.5
-HS obs plane lpt widths       : 1.5 1.5 1.5
+HS obs plane count            : 6
+HS obs plane locations        : 1.0 1.5 2.0 2.5 3.0 3.5
+HS obs plane lpt widths       : 1.5 1.5 1.5 1.5 1.5 1.5
 
 # Time integration
 Max timestep size : 4e-2
 Max cfl number    : 0.9
 
 # Implicit solvers
-Xflow velocity iteration : 120
+Xflow velocity iteration : 12
 Xflow velocity tolerance : 1e-12
-Cube velocity iteration : 120
+Cube velocity iteration : 12
 Cube velocity tolerance : 1e-12
 
 # Ensight output
-Ensight at intervals  : false
+Ensight at intervals  : true
 Ensight output period : 2e-1
 

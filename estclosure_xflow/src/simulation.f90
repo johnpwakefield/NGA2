@@ -629,7 +629,9 @@ contains
   subroutine simulation_init
     use param, only: param_read
     use messager, only: log
+    use string, only: str_long
     implicit none
+    character(len=str_long) :: message
 
     ! Build geometries
     call geometry_cube_init()
@@ -886,9 +888,12 @@ contains
     call param_read('Ensight at intervals', ens_at_ints)
     if (.not. ens_at_ints) then
       call param_read('Ensight output period',ens_evt%tper)
+      write(message,'("Writing ensight at ",e16.8," intervals.")') ens_evt%tper
     else
       ens_evt%tper = 6e66_WP
+      write(message,'("Not writing ensight.")')
     end if
+    call log(message)
 
     ! Initialize timers
     wt_total%time = 0.0_WP    ; wt_total%percent = 0.0_WP;
@@ -902,7 +907,6 @@ contains
     wt_force%time = 0.0_WP    ; wt_force%percent = 0.0_WP;
     wt_cpl%time = 0.0_WP      ; wt_cpl%percent = 0.0_WP;
     wt_rest%time = 0.0_WP     ; wt_rest%percent = 0.0_WP;
-
 
     ! Create a monitor file
     create_monitor: block

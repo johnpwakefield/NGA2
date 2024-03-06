@@ -531,7 +531,7 @@ contains
     integer :: n, i, j, k
     integer, dimension(3) :: ind
     real(WP), dimension(3) :: fvel
-    real(WP) :: b, cellvoli, dx, pvol
+    real(WP) :: b, cellvoli, dx, vp
 
     if (.not. this%in_grp) return
 
@@ -539,7 +539,7 @@ contains
     this%phi(:,:,:) = 0.0_WP; this%phi_x(:,:,:) = 0.0_WP;
     this%up(:,:,:,:) = 0.0_WP; this%uf(:,:,:,:) = 0.0_WP;
     do n = 1, size(ps)
-      pvol = pi * ps(n)%d**3 / 6.0_WP
+      vp = pi * ps(n)%d**3 / 6.0_WP
       ps(n)%ind = this%sim_cfg%get_ijk_global(ps(n)%pos)
       fvel = this%sim_cfg%get_velocity(pos=ps(n)%pos, i0=ps(n)%ind(1),        &
         j0=ps(n)%ind(2), k0=ps(n)%ind(3), U=U, V=V, W=W)
@@ -547,12 +547,10 @@ contains
       i = this%pg%imin_; j = ind(2); k = ind(3);
       dx = ps(n)%pos(1) - this%offset
       b = -6.0_WP / flt%params(1)**2
-      this%phi(i,j,k) = this%phi(i,j,k) + pvol * exp(b * dx**2)
-      this%phi_x(i,j,k) = this%phi_x(i,j,k) +                                 &
-        2 * b * dx * pvol * exp(b * dx**2)
-      this%up(i,j,k,:) = this%up(i,j,k,:) +                                   &
-        ps(n)%vel * pvol * exp(b * dx**2)
-      this%uf(i,j,k,:) = this%uf(i,j,k,:) + fvel * pvol * exp(b * dx**2)
+      this%phi(i,j,k) = this%phi(i,j,k) + vp * exp(b * dx**2)
+      this%phi_x(i,j,k) = this%phi_x(i,j,k) + 2 * b * dx * vp * exp(b * dx**2)
+      this%up(i,j,k,:) = this%up(i,j,k,:) + ps(n)%vel * vp * exp(b * dx**2)
+      this%uf(i,j,k,:) = this%uf(i,j,k,:) + fvel * vp * exp(b * dx**2)
     end do
 
     ! normalize phi
@@ -560,10 +558,15 @@ contains
     this%phi(:,:,:) = cellvoli * this%phi(:,:,:)
     b = sum(this%phi(this%pg%imin_:this%pg%imax_,this%pg%jmin_:this%pg%jmax_, &
       this%pg%kmin_:this%pg%kmax_))
-    call mpi_allreduce(b, this%phimean, 1, MPI_REAL_WP, MPI_SUM,              &
-      this%pg%comm)
+    call mpi_allreduce(b, this%phimean, 1, MPI_REAL_WP, MPI_SUM, this%pg%comm)
     this%phimean = this%phimean / (this%pg%nx * this%pg%ny * this%pg%nz)
-    this%phi(:,:,:) = this%phi(:,:,:) - this%phimean
+
+    ! we normalize everything by phimean to avoid roundoff error
+    this%phi(:,:,:) = this%phi(:,:,:) / this%phimean
+    this%phi_x(:,:,:) = this%phi_x(:,:,:) / this%phimean
+    this%up(:,:,:,1) = this%up(:,:,:,1) / this%phimean
+    this%up(:,:,:,2) = this%up(:,:,:,2) / this%phimean
+    this%phi(:,:,:) = this%phi(:,:,:) - 1.0
 
     ! filter in normal directions
     this%work_c(:,:,:) = this%phi(:,:,:)
@@ -1078,7 +1081,7 @@ contains
     do n = 1, 3; UB_loc(n) = sum(up(i,lj:hj,lk:hk,n)); end do
     call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM,             &
       fft%pg%comm, ierr)
-    stats%UB = stats%UB / N2
+    stats%UB = stats%UB * (phimean / N2)
 
     ! compute Reynolds-stress-type terms
     !TODO check this has the correct mean
@@ -1091,7 +1094,7 @@ contains
     end do
     call mpi_allreduce(UC2_loc, stats%UC2, 9, MPI_REAL_WP, MPI_SUM,           &
       fft%pg%comm, ierr)
-    stats%UC2 = stats%UC2 / N2
+    stats%UC2 = stats%UC2 * (phimean**2 / N2)
 
     ! compute SB
     do n = 1, 3
@@ -1100,14 +1103,14 @@ contains
     end do
     call mpi_allreduce(SB_loc, stats%SB, 3, MPI_REAL_WP, MPI_SUM,             &
       fft%pg%comm, ierr)
-    stats%SB = stats%SB / N2
+    stats%SB = stats%SB * (phimean / N2)
 
     ! compute PC2
     work_r(i,:,:) = phi(i,:,:)**2
     PC2_loc = sum(work_r(i,lj:hj,lk:hk))
     call mpi_allreduce(PC2_loc, stats%PC2, 1, MPI_REAL_WP, MPI_SUM,           &
       fft%pg%comm, ierr)
-    stats%PC2 = stats%PC2 / N2
+    stats%PC2 = stats%PC2 * (phimean**2 / N2)
 
     ! compute UB
     do n = 1, 3
@@ -1115,7 +1118,7 @@ contains
     end do
     call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM,             &
       fft%pg%comm, ierr)
-    stats%UB = stats%UB / N2
+    stats%UB = stats%UB * (phimean / N2)
 
     ! compute PCUB
     do n = 1, 3
@@ -1124,7 +1127,7 @@ contains
     end do
     call mpi_allreduce(PCUB_loc, stats%PCUB, 3, MPI_REAL_WP, MPI_SUM,         &
       fft%pg%comm, ierr)
-    stats%PCUB = stats%PCUB / N2
+    stats%PCUB = stats%PCUB * (phimean**2 / N2)
 
     ! store/compute products of upbar with gradients of phi check
     work_r(i,:,:) = up(i,:,:,1) * phi_x(i,:,:)
@@ -1147,7 +1150,7 @@ contains
     UBPCG_loc(3) = sum(work_r(i,lj:hj,lk:hk))
     call mpi_allreduce(UBPCG_loc, stats%UBPCG, 3, MPI_REAL_WP, MPI_SUM,     &
       fft%pg%comm)
-    stats%UBPCG = stats%UBPCG / N2
+    stats%UBPCG = stats%UBPCG * (phimean**2 / N2)
 
   end subroutine compute_opln_stats_single
 

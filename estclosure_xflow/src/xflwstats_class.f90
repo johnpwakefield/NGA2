@@ -531,7 +531,7 @@ contains
     integer :: n, i, j, k
     integer, dimension(3) :: ind
     real(WP), dimension(3) :: fvel
-    real(WP) :: b, cellvoli, dx, vp
+    real(WP) :: b, cellvoli, dx, vp, vpexpbdx2
 
     if (.not. this%in_grp) return
 
@@ -547,10 +547,11 @@ contains
       i = this%pg%imin_; j = ind(2); k = ind(3);
       dx = ps(n)%pos(1) - this%offset
       b = -6.0_WP / flt%params(1)**2
-      this%phi(i,j,k) = this%phi(i,j,k) + vp * exp(b * dx**2)
-      this%phi_x(i,j,k) = this%phi_x(i,j,k) + 2 * b * dx * vp * exp(b * dx**2)
-      this%up(i,j,k,:) = this%up(i,j,k,:) + ps(n)%vel * vp * exp(b * dx**2)
-      this%uf(i,j,k,:) = this%uf(i,j,k,:) + fvel * vp * exp(b * dx**2)
+      vpexpbdx2 = vp * exp(b * dx**2)
+      this%phi(i,j,k) = this%phi(i,j,k) + vpexpbdx2
+      this%phi_x(i,j,k) = this%phi_x(i,j,k) + 2 * b * dx * vpexpbdx2
+      this%up(i,j,k,:) = this%up(i,j,k,:) + ps(n)%vel * vpexpbdx2
+      this%uf(i,j,k,:) = this%uf(i,j,k,:) + fvel * vpexpbdx2
     end do
 
     ! normalize phi
@@ -564,8 +565,8 @@ contains
     ! we normalize everything by phimean to avoid roundoff error
     this%phi(:,:,:) = this%phi(:,:,:) / this%phimean
     this%phi_x(:,:,:) = this%phi_x(:,:,:) / this%phimean
-    this%up(:,:,:,1) = this%up(:,:,:,1) / this%phimean
-    this%up(:,:,:,2) = this%up(:,:,:,2) / this%phimean
+    this%up(:,:,:,:) = this%up(:,:,:,:) / this%phimean
+    this%uf(:,:,:,:) = this%uf(:,:,:,:) / this%phimean
     this%phi(:,:,:) = this%phi(:,:,:) - 1.0
 
     ! filter in normal directions
@@ -741,7 +742,8 @@ contains
     do i = 1, this%num_filters
       do j = 1, this%num_planes
         write(ostr, '(F8.4)') planelocs(j)
-        this%fstats(j,i)%out_fname = 'xflw_obs_'//trim(adjustl(ostr))
+        write(nstr, '(F8.4)') this%filters(j,i)%params(1)
+        this%fstats(j,i)%out_fname = 'xflw_obs_'//trim(adjustl(ostr))//'_'//trim(adjustl(nstr))
         if (this%planes(j)%in_grp)                                            &
           call this%fstats(j,i)%init(this%planes(j)%fft%pg%rank .eq. 0)
       end do
@@ -966,11 +968,10 @@ contains
 
   end subroutine xflwstats_xdep_stats
 
-  !TODO xflwstats_opln_stats ! observation plane
-  ! will mostly just call single below, but needs to be its own function to iterate through planes and filters, along with calling
-  ! slice io and doing any needed setup work
-  !TODO this has not been edited since being copied from the old version; none of the micro stats/setup stuff is
-  !correct, the iteration through filters has changed, couplers need to be added for particles, etc
+  ! observation plane
+  ! will mostly just call single below, but needs to be its own function to
+  ! iterate through planes and filters, along with calling slice io and doing
+  ! any needed setup work
   subroutine xflwstats_opln_stats(this, step, t)
     use mpi_f08, only: MPI_UNDEFINED
     implicit none
@@ -994,6 +995,23 @@ contains
       ! pull from obsplane coupler
       call this%planes(m)%lptcpl%pull()
 
+      ! update io pmesh
+      if (this%sliceio_setup(m)) then
+        call this%planes(m)%io_pm%reset()
+        call this%planes(m)%io_pm%set_size(this%planes(m)%lptcpl%pulledparticlecount)
+        do i = 1, this%planes(m)%lptcpl%pulledparticlecount
+          this%planes(m)%io_pm%pos(:,i) = this%planes(m)%lptcpl%pulledparticles(i)%pos
+          this%planes(m)%io_pm%var(1,i) = this%planes(m)%lptcpl%pulledparticles(i)%id
+          this%planes(m)%io_pm%var(2,i) = this%planes(m)%lptcpl%pulledparticles(i)%d
+          this%planes(m)%io_pm%vec(:,1,i) = this%planes(m)%lptcpl%pulledparticles(i)%vel
+          !TODO fluid vel?
+          !ind = this%ps%cfg%get_ijk_global(this%io_lpt%p(i)%pos)
+          !      this%io_pm%vec(:,2,i) = this%ps%cfg%get_velocity(             &
+          !        pos=this%io_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
+          !        U=this%U, V=this%V, W=this%W)
+        end do
+      end if
+
       do n = 1, this%num_filters
 
         ! apply filter
@@ -1009,39 +1027,19 @@ contains
         if (this%planes(m)%fft%pg%rank .eq. 0)                                &
           call this%fstats(m,n)%mon%write()
 
-        ! update io and write slice if applicable
-        !  !TODO step must be needed somewhere
+        ! update Eulerian fields
         if (this%sliceio_setup(m)) then
-
-          ! update pmesh
-          call this%planes(m)%io_pm%reset()
-          call this%planes(m)%io_pm%set_size(this%planes(m)%lptcpl%pulledparticlecount)
-          do i = 1, this%planes(m)%lptcpl%pulledparticlecount
-            this%planes(m)%io_pm%pos(:,i) = this%planes(m)%lptcpl%pulledparticles(i)%pos
-            this%planes(m)%io_pm%var(1,i) = this%planes(m)%lptcpl%pulledparticles(i)%id
-            this%planes(m)%io_pm%var(2,i) = this%planes(m)%lptcpl%pulledparticles(i)%d
-            this%planes(m)%io_pm%vec(:,1,i) = this%planes(m)%lptcpl%pulledparticles(i)%vel
-            !TODO fluid vel?
-            !ind = this%ps%cfg%get_ijk_global(this%io_lpt%p(i)%pos)
-            !      this%io_pm%vec(:,2,i) = this%ps%cfg%get_velocity(             &
-            !        pos=this%io_lpt%p(i)%pos, i0=ind(1), j0=ind(2), k0=ind(3),     &
-            !        U=this%U, V=this%V, W=this%W)
-          end do
-
-          ! update Eulerian fields
           this%planes(m)%phi_io(:,:,:,n)   = this%planes(m)%phi(:,:,:)
           this%planes(m)%phi_x_io(:,:,:,n) = this%planes(m)%phi_x(:,:,:)
           this%planes(m)%up_io(:,:,:,:,n)  = this%planes(m)%up(:,:,:,:)
           this%planes(m)%uf_io(:,:,:,:,n)  = this%planes(m)%uf(:,:,:,:)
-
         end if
 
       end do
 
       ! write npy output for slice
-      if (this%planes(m)%in_grp) then
+      if (this%planes(m)%in_grp .and. this%sliceio_setup(m))                  &
         call this%planes(m)%io_f%write_data(t)
-      end if
 
     end do
 
@@ -1077,23 +1075,20 @@ contains
     ! store PB
     stats%PB = phimean
 
-    ! compute UB
+    ! compute UB and UC2
+    UC2_loc(:,:) = 0.0_WP
     do n = 1, 3; UB_loc(n) = sum(up(i,lj:hj,lk:hk,n)); end do
     call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM,             &
       fft%pg%comm, ierr)
-    stats%UB = stats%UB * (phimean / N2)
-
-    ! compute Reynolds-stress-type terms
-    !TODO check this has the correct mean
-    UC2_loc(:,:) = 0.0_WP
     do n = 1, 3
       do m = n, 3
-        work_r(i,:,:) = up(i,:,:,n) * up(i,:,:,m)
+        work_r(i,:,:) = (up(i,:,:,n) - stats%UB(n)) * (up(i,:,:,m) - stats%UB(m))
         UC2_loc(n,m) = sum(work_r(i,lj:hj,lk:hk))
       end do
     end do
     call mpi_allreduce(UC2_loc, stats%UC2, 9, MPI_REAL_WP, MPI_SUM,           &
       fft%pg%comm, ierr)
+    stats%UB = stats%UB * (phimean / N2)
     stats%UC2 = stats%UC2 * (phimean**2 / N2)
 
     ! compute SB
@@ -1111,14 +1106,6 @@ contains
     call mpi_allreduce(PC2_loc, stats%PC2, 1, MPI_REAL_WP, MPI_SUM,           &
       fft%pg%comm, ierr)
     stats%PC2 = stats%PC2 * (phimean**2 / N2)
-
-    ! compute UB
-    do n = 1, 3
-      UB_loc(n) = sum(up(i,lj:hj,lk:hk,n))
-    end do
-    call mpi_allreduce(UB_loc, stats%UB, 3, MPI_REAL_WP, MPI_SUM,             &
-      fft%pg%comm, ierr)
-    stats%UB = stats%UB * (phimean / N2)
 
     ! compute PCUB
     do n = 1, 3

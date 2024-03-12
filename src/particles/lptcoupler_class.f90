@@ -139,6 +139,8 @@ contains
     call mpi_group_translate_ranks(self%sgrp, 1, (/ 0 /), self%ugrp, ranks(1:1))
     call mpi_group_translate_ranks(self%dgrp, 1, (/ 0 /), self%ugrp, ranks(2:2))
     self%uroot = 0; self%sroot = ranks(1); self%droot = ranks(2);
+    if (self%sroot .eq. MPI_UNDEFINED) call die("[lptcoupler] sroot undefined")
+    if (self%droot .eq. MPI_UNDEFINED) call die("[lptcoupler] droot undefined")
 
     ! check ranks in the union group and the union communicator are the same
     call check_ranks_equal(self%comm, self%ugrp)

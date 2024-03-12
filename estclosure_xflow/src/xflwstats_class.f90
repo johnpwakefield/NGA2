@@ -423,6 +423,8 @@ contains
     ! build sgrid
     xs(1) = offset - 0.5_WP * width
     xs(2) = offset + 0.5_WP * width
+    if (xs(1) .lt. sim_pg%x(sim_pg%imin)) call die("[xflwstats] slice includes left of domain")
+    if (xs(2) .gt. sim_pg%x(sim_pg%imax+1)) call die("[xflwstats] slice includes right of domain")
     dy = sim_pg%yL / ny; dz = sim_pg%zL / nz;
     ys(:) = (/ (real(i,WP) * dy + sim_pg%y(sim_pg%jmin), i = 0, ny) /)
     zs(:) = (/ (real(i,WP) * dz + sim_pg%z(sim_pg%kmin), i = 0, nz) /)
@@ -470,7 +472,6 @@ contains
 
   subroutine obsplane_init(this, sim_cfg, FFTN, ps, offset, width)
     use messager, only: die
-    use mpi_f08, only: mpi_bcast, mpi_allreduce, MPI_LOGICAL, MPI_LOR, mpi_group_range_incl
     use sgrid_class, only: cartesian
     implicit none
     class(obsplane), intent(inout) :: this

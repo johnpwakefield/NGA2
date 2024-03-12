@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	8 4 1
+Partition :	8 6 1
 
 # Mesh definition
 Cube Lx   : 1.0

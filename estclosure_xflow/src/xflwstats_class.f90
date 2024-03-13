@@ -948,7 +948,7 @@ contains
           press(i) = press(i) + this%p(i,j,k)
           mp = this%rhof(i,j,k) * this%ps%cfg%dx(i) * this%ps%cfg%dy(j)       &
             * this%ps%cfg%dz(k)
-          fke(i) = fke(i) + 0.5_WP * mp * sum(((/ this%U(i,j,k),              &
+          fke(i) = fke(i) + 0.5_WP * this%rhof(i,j,k) * sum(((/ this%U(i,j,k),&
             this%V(i,j,k), this%W(i,j,k) /) - velmean)**2)
         end do
       end do

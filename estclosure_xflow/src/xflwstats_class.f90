@@ -894,7 +894,7 @@ contains
         visc=this%visc, stress_x=this%zeros, stress_y=this%zeros,             &
         stress_z=this%zeros, p=this%ps%p(n), acc=acc, opt_dt=opt_dt)
       drg(:,i) = drg(:,i) + acc(:)
-      mp = pi * this%rho * this%ps%p(n)%d**3 / 6.0_WP
+      mp = pi * this%ps%rho * this%ps%p(n)%d**3 / 6.0_WP
       pke(i) = pke(i) + 0.5_WP * mp * sum((this%ps%p(n)%vel - velmean)**2)
     end do
 
@@ -946,9 +946,8 @@ contains
           vel(2,i) = vel(2,i) + this%V(i,j,k)
           vel(3,i) = vel(3,i) + this%W(i,j,k)
           press(i) = press(i) + this%p(i,j,k)
-          mp = this%rhof(i,j,k) * this%ps%cfg%dx(i) * this%ps%cfg%dy(j)       &
-            * this%ps%cfg%dz(k)
-          fke(i) = fke(i) + 0.5_WP * this%rhof(i,j,k) * sum(((/ this%U(i,j,k),&
+          mp = this%rhof(i,j,k) * this%ps%cfg%vol(i,j,k)
+          fke(i) = fke(i) + 0.5_WP * mp * sum(((/ this%U(i,j,k),              &
             this%V(i,j,k), this%W(i,j,k) /) - velmean)**2)
         end do
       end do

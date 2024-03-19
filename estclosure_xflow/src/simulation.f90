@@ -44,7 +44,7 @@ module simulation
   real(WP), parameter :: GRID_OVERLAP = 0.02_WP
   ! if we rescale we get a mean velocity that is constant over time, but we
   ! induce slip at the inflow from this rescaling
-  logical, parameter :: RESCALE_XFLW_BDRY = .true.
+  logical, parameter :: RESCALE_XFLW_BDRY = .false.
 
 
   !> The easiest way to get data from the cube is probably to just evolve the

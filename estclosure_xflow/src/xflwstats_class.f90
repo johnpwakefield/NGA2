@@ -894,7 +894,7 @@ contains
         visc=this%visc, stress_x=this%zeros, stress_y=this%zeros,             &
         stress_z=this%zeros, p=this%ps%p(n), acc=acc, opt_dt=opt_dt)
       drg(:,i) = drg(:,i) + acc(:)
-      mp = pi * this%ps%p(n)%d**3 / 6.0_WP
+      mp = pi * this%rho * this%ps%p(n)%d**3 / 6.0_WP
       pke(i) = pke(i) + 0.5_WP * mp * sum((this%ps%p(n)%vel - velmean)**2)
     end do
 

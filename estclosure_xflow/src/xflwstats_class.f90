@@ -918,6 +918,7 @@ contains
     if (this%ps%cfg%rank .eq. 0) then
       do i = this%ps%cfg%imin, this%ps%cfg%imax
         slicevol = this%ps%cfg%dx(i) * this%ps%cfg%yL * this%ps%cfg%zL
+        pke(i) = pke(i) / slicevol
         this%mstats%nden(i) = this%mstats%num(i) / slicevol
         this%mstats%ndensq(i) = 0.0_WP
         do k = this%ps%cfg%kmin, this%ps%cfg%kmax
@@ -959,6 +960,9 @@ contains
     call mpi_reduce(fke, this%mstats%fke,    this%ps%cfg%nx,   MPI_REAL_WP,   &
       MPI_SUM, 0, this%ps%cfg%comm)
     if (this%ps%cfg%rank .eq. 0) then
+      do i = this%ps%cfg%imin_, this%ps%cfg%imax_
+        fke(i) = fke(i) / (this%ps%cfg%yL * this%ps%cfg%zL * this%ps%cfg%dx(i))
+      end do
       this%mstats%fvel = this%mstats%fvel / (this%ps%cfg%ny * this%ps%cfg%nz)
       this%mstats%p    = this%mstats%p    / (this%ps%cfg%ny * this%ps%cfg%nz)
     end if

@@ -46,7 +46,9 @@ module eccontroller_class
     ! integral length scales
     real(WP) :: linf, etamin, eta
     ! number of timescales before writing output
-    real(WP) :: interval_tinfs, sim_burnin_mult, param_burnin_mult
+    real(WP) :: interval_tinfs, interval_flowthroughs, sim_burnin_mult,       &
+      param_burnin_mult, sim_burnin_flowthrough_mult,                         &
+      param_burnin_flowthrough_mult, xfrmsmult, xflen
     ! store current parameter set
     real(WP), dimension(7) :: param_target
     real(WP), dimension(4) :: nondm_target
@@ -98,8 +100,13 @@ contains
 
     ! read params
     call param_read('EC integral timescales', ec%interval_tinfs)
+    call param_read('EC flowthroughs', ec%interval_flowthroughs)
     call param_read('EC new sim multiplier', ec%sim_burnin_mult)
     call param_read('EC new params multiplier', ec%param_burnin_mult)
+    call param_read('EC new sim flowthrough multiplier', ec%sim_burnin_flowthrough_mult)
+    call param_read('EC new params flowthrough multiplier', ec%param_burnin_flowthrough_mult)
+    call param_read('Xflow rms mult', ec%xfrmsmult)
+    call param_read('Xflow Ll', ec%xflen)
 
   end subroutine ec_construct
 
@@ -169,7 +176,6 @@ contains
     class(eccontroller), intent(inout) :: ec
 
     ! setup monitor file
-    !TODO split this into one for cube and one for xflow
     ec%out_fname = trim(adjustl('ecstate'))
     ec%mon = monitor(ec%sim_pg%amRoot, ec%out_fname)
     call ec%mon%add_column(ec%step,            'step')
@@ -295,16 +301,31 @@ contains
     implicit none
     class(eccontroller_mesh), intent(in) :: ec
     real(WP), intent(out) :: interval
+    real(WP) :: tinf_interval, xf_interval
 
-    interval = ec%interval_tinfs * FORCE_TIMESCALE
+    tinf_interval = ec%interval_tinfs * FORCE_TIMESCALE
+    xf_interval = ec%interval_flowthroughs * ec%xflen / (ec%dimturb(1) *      &
+      ec%xfrmsmult)
 
     if (ec%params_are_new()) then
       if (all(ec%Icurr(:) .eq. 1)) then             ! new sim
-        if (ec%sim_pg%amroot) call log("[EC] using new sim burnin")
-        interval = interval * ec%sim_burnin_mult
+        if (ec%sim_pg%amroot) call log("[EC] using new sim interval adjustment")
+        tinf_interval = tinf_interval * ec%sim_burnin_mult
+        xf_interval = xf_interval * ec%sim_burnin_flowthrough_mult
       else                                          ! new params
-        if (ec%sim_pg%amroot) call log("[EC] using new params burnin")
-        interval = interval * ec%param_burnin_mult
+        if (ec%sim_pg%amroot) call log("[EC] using new params interval adjustment")
+        tinf_interval = tinf_interval * ec%param_burnin_mult
+        xf_interval = xf_interval * ec%param_burnin_flowthrough_mult
+      end if
+    end if
+
+    interval = max(tinf_interval, xf_interval)
+
+    if (ec%sim_pg%amroot) then
+      if (interval .eq. tinf_interval) then
+        call log("[EC] interval is tinf limited")
+      else
+        call log("[EC] interval is xf limited")
       end if
     end if
 

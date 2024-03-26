@@ -464,10 +464,13 @@ contains
     integer, dimension(8) :: part_proc_loc
 
     part_proc_loc(:) = 0
-    myproc = (d%cfg%iproc - 1) * d%cfg%npx * d%cfg%npy + (d%cfg%jproc - 1) *  &
-      d%cfg%npy + d%cfg%kproc
+    ! we reverse the x index from standard so we get the leftmost copy in the
+    ! reduction
+    myproc = (d%cfg%npx - d%cfg%iproc) * d%cfg%npy * d%cfg%npz                &
+      + (d%cfg%jproc - 1) * d%cfg%npz + d%cfg%kproc
     do i = 1, d%lp%np_
       if (1 .gt. d%lp%p(i)%id .or. d%lp%p(i)%id .gt. 8) cycle
+      ! for xflow we only want the furthest left one
       if (part_proc_loc(d%lp%p(i)%id) .ne. 0) then
         if (d%lp%p(i)%pos(1) .gt. part_pos_loc(1,d%lp%p(i)%id)) cycle
       end if

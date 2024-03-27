@@ -78,7 +78,7 @@ contains
 
    !> Constructor for an empty ensight object
    function construct_ensight(cfg,name,skipmkdir) result(self)
-      use messager, only: die
+      use messager, only: log, die
       use mpi_f08,  only: MPI_BCAST,MPI_INTEGER,mpi_barrier
       use parallel, only: MPI_REAL_WP
       implicit none
@@ -105,7 +105,7 @@ contains
 
       ! Create directory
       if (self%cfg%amRoot .and. self%mkdirs) then
-         call execute_command_line('mkdir -p ensight')
+         call log("[ensight] Making directory : ensight/"//trim(self%name))
          call execute_command_line('mkdir -p ensight/'//trim(self%name))
       end if
       call mpi_barrier(self%cfg%comm, ierr)

@@ -1,0 +1,81 @@
+
+# Input file for Rel 55 Sweep
+
+# Parallelization
+Partition :	12 6 1
+
+# Mesh definition
+Cube Lx   : 1.0
+Cube Nx   : 144
+Xflow Ll  : 4.22
+Xflow Nl  : 620
+Xflow Nw  : 144
+Overlap   : 0.02
+
+# Particle Parameters
+Number of particles :   2000000
+
+# Steady-state (forcing) parameters
+Forcing constant : 60.0
+
+# Xflow parameters
+Xflow rms mult   : 4.0
+#Xflow relax time : 0.1
+
+# Particle reset boundaries
+Particle reset boundaries : 0.4 0.5
+
+# Parameter sweep
+EC min Relambda : 55.0
+EC max Relambda : 55.0
+EC num Relambda : 1
+EC log Relambda : false
+EC min Stk      : 0.5
+EC max Stk      : 3.0
+EC num Stk      : 6
+EC log Stk      : false
+EC min Wovk     : 0.0
+EC max Wovk     : 2.0
+EC num Wovk     : 3
+EC log Wovk     : false
+EC min vf       : 1e-5
+EC max vf       : 1e-5
+EC num vf       : 1
+EC log vf       : true
+EC num sweeps   : 1
+EC data per statpoint : 8
+
+# data collection parameters
+EC integral timescales               : 01.0
+EC flowthroughs                      : 00.2
+EC new sim multiplier                : 12.0
+EC new params multiplier             : 02.0
+EC new sim flowthrough multiplier    : 15.0
+EC new params flowthrough multiplier : 08.0
+
+# EC Parameters
+Cube FFT mesh   : 512 512 512
+XFlow FFT mesh  : 768 768
+Filter list     : filterlist
+
+# HS Parameters
+HS write slice                : true
+HS slice thickness proportion : 0.1
+HS obs plane count            : 4
+HS obs plane locations        : 1.5 2.0 2.5 3.0
+HS obs plane lpt widths       : 1.0 1.0 1.0 1.0
+
+# Time integration
+Max timestep size : 4e-2
+Max cfl number    : 0.9
+
+# Implicit solvers
+Xflow velocity iteration : 12
+Xflow velocity tolerance : 1e-12
+Cube velocity iteration : 12
+Cube velocity tolerance : 1e-12
+
+# Ensight output
+Ensight at intervals  : false
+Ensight output period : 4e0
+
